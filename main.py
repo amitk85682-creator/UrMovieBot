@@ -14,7 +14,7 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 from fuzzywuzzy import process, fuzz
-import db_utils  # Purani file same rahegi
+import db_utils
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
