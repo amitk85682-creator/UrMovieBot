@@ -334,111 +334,110 @@ def get_file_options_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 # ==================== MOVIE DELIVERY FUNCTIONS ====================
-async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, movie_data: tuple):
+async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, movie_data: tuple, check_qualities=True):
     """
-    Sends file from Private Channel to User with Premium Styling.
+    Handles Multi-Quality check AND Premium File Delivery (Private Channel Copy).
     """
     try:
         movie_id, title, url, file_id = movie_data
-        chat_id = user_id  # This is the user's PM chat ID
+        chat_id = user_id
 
-        # --- 1. PREMIUM LOADING MESSAGE ---
-        # यूजर को अच्छा फील देने के लिए पहले "Searching" मैसेज भेजें
+        # --- PART A: MULTI-QUALITY CHECK ---
+        # अगर यह पहली बार सर्च है (बटन से क्लिक नहीं किया गया), तो हम चेक करेंगे कि और क्वालिटी हैं या नहीं
+        if check_qualities:
+            similar_movies = get_similar_movies(title)
+            
+            # अगर 1 से ज्यादा रिजल्ट मिले, तो यूजर को चुनने दें
+            if len(similar_movies) > 1:
+                keyboard = []
+                row = []
+                for mov in similar_movies:
+                    m_id, m_title, _, _ = mov
+                    # बटन पर पूरा नाम या सिर्फ क्वालिटी दिखा सकते हैं
+                    # हम बटन का नाम थोड़ा छोटा कर रहे हैं ताकि फिट हो जाए
+                    btn_text = m_title.replace(title.split()[0], "").strip() or "🎬 View File"
+                    if len(btn_text) > 20: btn_text = m_title[:20] + "..."
+                    
+                    # callback_data में 'quality_' prefix लगा रहे हैं
+                    row.append(InlineKeyboardButton(f"📁 {btn_text}", callback_data=f"quality_{m_id}"))
+                    
+                    if len(row) == 2: # एक लाइन में 2 बटन
+                        keyboard.append(row)
+                        row = []
+                if row: keyboard.append(row)
+
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🎬 <b>{title}</b>\n\n✅ <b>Multiple qualities found!</b>\n👇 <i>Please select one:</i>",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+                return  # यहाँ फंक्शन रोक दें, यूजर के क्लिक का इंतज़ार करें
+
+        # --- PART B: FILE SENDING (PREMIUM LOGIC) ---
+        # अगर एक ही फाइल है या यूजर ने बटन चुन लिया है, तो यहाँ से आगे बढ़ें
+        
+        # 1. Processing Msg
         loading_msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"<b>📥 ᴘʀᴏᴄᴇssɪɴɢ ʏᴏᴜʀ ғɪʟᴇ...</b>\n<i>Please wait while I fetch '{title}' from the database.</i>",
+            text=f"<b>📥 ᴘʀᴏᴄᴇssɪɴɢ ʏᴏᴜʀ ғɪʟᴇ...</b>\n<i>Fetching content from Private Archives...</i>",
             parse_mode='HTML'
         )
 
-        # --- 2. PREMIUM CAPTION SETUP ---
+        # 2. Premium Caption
         caption_text = (
             f"🎬 <b>{title}</b>\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"💿 <b>Qᴜᴀʟɪᴛʏ:</b> <i>Premium Video</i>\n"
-            f"🔊 <b>ʟᴀɴɢᴜᴀɢᴇ:</b> <i>Dual Audio [Hin+Eng]</i>\n"
+            f"💿 <b>Qᴜᴀʟɪᴛʏ:</b> <i>High Definition</i>\n"
+            f"🔊 <b>ʟᴀɴɢᴜᴀɢᴇ:</b> <i>Hindi / English</i>\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
             f"📢 <a href='{CHANNEL_LINK}'>Main Channel</a> | 💬 <a href='{GROUP_LINK}'>Support Group</a>\n\n"
-            f"⚠️ <i><b>Note:</b> Forward this file to your 'Saved Messages' immediately before it gets auto-deleted!</i>"
+            f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
         )
 
         sent_msg = None
 
-        # --- 3. LOGIC TO HANDLE PRIVATE CHANNEL LINK ---
-        # अगर डेटाबेस में फाइल ID नहीं है, लेकिन लिंक है (Private Channel का)
-        if not file_id and url and "t.me/c/" in url:
+        # 3. Logic: File ID -> Private Link -> Public Link
+        if file_id:
+            sent_msg = await context.bot.send_document(
+                chat_id=chat_id, document=file_id, caption=caption_text,
+                parse_mode='HTML', reply_markup=get_file_options_keyboard()
+            )
+        elif url and "t.me/c/" in url: # Private Channel Copy
             try:
-                # Private Channel Link Format: https://t.me/c/1234567890/100
-                # हमें इसमें से Chat ID (-1001234567890) और Message ID (100) निकालना है
-                
                 parts = url.rstrip('/').split('/')
-                
-                # '1234567890' को निकालें और उसके आगे '-100' लगा दें
-                # क्योंकि Telegram API में Private Channel ID हमेशा -100 से शुरू होती है
-                channel_id_str = parts[-2]
-                if not channel_id_str.startswith("-100"):
-                    from_chat_id = int("-100" + channel_id_str)
-                else:
-                    from_chat_id = int(channel_id_str)
-                
+                ch_id_str = parts[-2]
+                from_chat_id = int("-100" + ch_id_str) if not ch_id_str.startswith("-100") else int(ch_id_str)
                 message_id = int(parts[-1])
 
-                # अब फाइल COPY करें (Link नहीं, फाइल जाएगी)
                 sent_msg = await context.bot.copy_message(
-                    chat_id=chat_id,
-                    from_chat_id=from_chat_id,  # Private Channel ID
-                    message_id=message_id,      # Movie Post ID
-                    caption=caption_text,       # Replace original caption with New Premium one
-                    parse_mode='HTML',
-                    reply_markup=get_file_options_keyboard()
+                    chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id,
+                    caption=caption_text, parse_mode='HTML', reply_markup=get_file_options_keyboard()
                 )
-            
             except Exception as e:
-                logger.error(f"Failed to copy from private channel: {e}")
-                # अगर कॉपी फेल हो जाए (शायद बॉट वहां एडमिन नहीं है), तो एरर न दिखाएं, बस लिंक भेज दें
+                logger.error(f"Copy error: {e}")
                 sent_msg = await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"⚠️ <b>File Copy Error</b>\nI found the movie, but cannot access the private channel.\n\n🔗 <b>Try Link:</b> {url}",
-                    parse_mode='HTML'
+                    chat_id=chat_id, text=f"⚠️ Copy Failed. Access Link:\n{url}", reply_markup=get_file_options_keyboard()
                 )
-
-        # --- 4. LOGIC FOR DIRECT FILE ID (अगर DB में File ID है) ---
-        elif file_id:
-            sent_msg = await context.bot.send_document(
-                chat_id=chat_id,
-                document=file_id,
-                caption=caption_text,
-                parse_mode='HTML',
-                reply_markup=get_file_options_keyboard()
-            )
-
-        # --- 5. LOGIC FOR PUBLIC LINKS ---
-        else:
+        else: # Link Fallback
             sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"🎬 <b>{title}</b>\n\n🔗 <b>Link:</b> {url}\n\n{caption_text}",
-                parse_mode='HTML',
-                reply_markup=get_file_options_keyboard()
+                parse_mode='HTML', reply_markup=get_file_options_keyboard()
             )
 
-        # --- 6. CLEANUP ---
-        # Loading मैसेज डिलीट करें
+        # 4. Cleanup & Auto Delete
         await context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
-
-        # --- 7. AUTO DELETE LOGIC ---
+        
         if sent_msg:
-            # टाइमर मैसेज भेजें
-            timer_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text="⏳ <i>This file will be deleted in <b>60 seconds</b> due to copyright safety.</i>",
-                parse_mode='HTML'
-            )
-            # दोनों मैसेज (फाइल + टाइमर) को 60 सेकंड बाद डिलीट करें
             asyncio.create_task(delete_message_after_delay(context, chat_id, sent_msg.message_id, 60))
-            asyncio.create_task(delete_message_after_delay(context, chat_id, timer_msg.message_id, 60))
+            # Optional: Send a small timer warning
+            timer = await context.bot.send_message(chat_id=chat_id, text="⏳ <i>File deletes in 60s.</i>", parse_mode='HTML')
+            asyncio.create_task(delete_message_after_delay(context, chat_id, timer.message_id, 60))
 
     except Exception as e:
-        logger.error(f"Error in send_movie_to_user: {e}")
+        logger.error(f"Send Movie Error: {e}")
 # ==================== TELEGRAM BOT HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - with deep link support for movie delivery"""
