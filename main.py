@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 import os
-import threading
 import asyncio
 import logging
 import re
+import threading
 import psycopg2
-from typing import Optional
 from flask import Flask
-from fuzzywuzzy import process, fuzz
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
-from telegram.constants import ParseMode, ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -18,293 +16,361 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler
 )
+from telegram.constants import ParseMode
+from fuzzywuzzy import fuzz
 
-# ==================== SETTINGS ====================
-# अपनी ID और टोकन यहाँ सही से डालें
+# ==================== CONFIGURATION ====================
+# Environment Variables (Fill these in your deployment settings)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get('DATABASE_URL')
-# Force Sub ke liye Channel/Group ki numeric ID (-100...) zaroori hai
-FSUB_CHANNEL_ID = os.environ.get('FSUB_CHANNEL_ID') # e.g., -10012345678
-FSUB_GROUP_ID = os.environ.get('FSUB_GROUP_ID')     # e.g., -10087654321
+ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 
-# Links & Branding
+# Channel & Group Usernames/Links
+CHANNEL_USERNAME = "@filmfybox"  # For checking subscription
+GROUP_USERNAME = "@Filmfybox002" # For checking subscription
 CHANNEL_LINK = "https://t.me/filmfybox"
 GROUP_LINK = "https://t.me/Filmfybox002"
-START_IMG = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhYD6_-uyyYg_YxJMkk06sbRQ5N-IH7HFjr3P1AYZLiQ6qSp3Ap_FgRWGjCKk6okFRh0bRTH5-TtrizBxsQpjxR6bdnNidTjiT-ICWhqaC0xcEJs89bSOTwrzBAMFYtWAv48llz96Ye9E3Q3vEHrtk1id8aceQbp_uxAJ4ASqZIEsK5FcaMYcrhj45i70c/s320/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg"
+START_IMG_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhYD6_-uyyYg_YxJMkk06sbRQ5N-IH7HFjr3P1AYZLiQ6qSp3Ap_FgRWGjCKk6okFRh0bRTH5-TtrizBxsQpjxR6bdnNidTjiT-ICWhqaC0xcEJs89bSOTwrzBAMFYtWAv48llz96Ye9E3Q3vEHrtk1id8aceQbp_uxAJ4ASqZIEsK5FcaMYcrhj45i70c/s320/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg"
 
-# Database Utility Import (Jaisa tumne kaha tha)
-try:
-    import db_utils
-    FIXED_DATABASE_URL = getattr(db_utils, "FIXED_DATABASE_URL", None)
-except Exception:
-    FIXED_DATABASE_URL = None
+# Auto Delete Time (in seconds)
+AUTO_DELETE_TIME = 60 
 
-logging.basicConfig(level=logging.INFO)
+# Logging Setup
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# ==================== DATABASE FUNCTIONS ====================
+# ==================== DATABASE CONNECTION ====================
 def get_db_connection():
     try:
-        conn_str = FIXED_DATABASE_URL or DATABASE_URL
-        return psycopg2.connect(conn_str)
+        return psycopg2.connect(DATABASE_URL)
     except Exception as e:
-        logger.error(f"DB Error: {e}")
+        logger.error(f"DB Connection Error: {e}")
         return None
-
-# --- OLD LOGIC RESTORED: Fetch Qualities from movie_files table ---
-def get_all_movie_qualities(movie_id):
-    """Fetch all available qualities (480p, 720p, etc) for a movie."""
-    conn = get_db_connection()
-    if not conn: return []
-    try:
-        cur = conn.cursor()
-        
-        # 1. Check movie_files table (Tumhara purana logic)
-        cur.execute("""
-            SELECT quality, url, file_id 
-            FROM movie_files 
-            WHERE movie_id = %s 
-            ORDER BY quality DESC
-        """, (movie_id,))
-        files = cur.fetchall() # Returns list of (quality, url, file_id)
-        
-        # 2. Check main movies table (Fallback)
-        cur.execute("SELECT url, file_id FROM movies WHERE id = %s", (movie_id,))
-        main_movie = cur.fetchone()
-        
-        final_list = []
-        # Add main file if exists
-        if main_movie and (main_movie[0] or main_movie[1]):
-            final_list.append(("Watch/Download", main_movie[0], main_movie[1]))
-            
-        # Add extra qualities
-        for f in files:
-            final_list.append(f)
-            
-        return final_list
-    except Exception as e:
-        logger.error(f"Error fetching qualities: {e}")
-        return []
-    finally:
-        if conn: conn.close()
-
-def search_movie_in_db(query):
-    """Search movie and return best match ID and Title"""
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT id, title FROM movies")
-        all_movies = cur.fetchall()
-        
-        # Fuzzy Matching
-        movie_dict = {m[1]: m[0] for m in all_movies} # title: id
-        match = process.extractOne(query, list(movie_dict.keys()), scorer=fuzz.token_sort_ratio)
-        
-        if match and match[1] >= 75: # 75% match threshold
-            return {"id": movie_dict[match[0]], "title": match[0]}
-        return None
-    except Exception as e:
-        logger.error(f"Search Error: {e}")
-        return None
-    finally:
-        if conn: conn.close()
 
 # ==================== HELPER FUNCTIONS ====================
-async def delete_after_delay(context, chat_id, message_ids, delay=60):
-    """Auto delete messages"""
-    await asyncio.sleep(delay)
-    for msg_id in message_ids:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except: pass
 
-async def is_user_joined(user_id, context):
-    """Check Force Subscribe logic"""
-    if not FSUB_CHANNEL_ID or not FSUB_GROUP_ID:
-        return True # Agar ID set nahi hai to ignore karega
+async def delete_message_later(context, chat_id, message_id, delay=AUTO_DELETE_TIME):
+    """Deletes a message after X seconds."""
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+async def is_user_subscribed(bot, user_id):
+    """Checks if user has joined both Channel and Group."""
     try:
         # Check Channel
-        member_ch = await context.bot.get_chat_member(FSUB_CHANNEL_ID, user_id)
-        if member_ch.status in ['left', 'kicked']: return False
-        # Check Group
-        member_gr = await context.bot.get_chat_member(FSUB_GROUP_ID, user_id)
-        if member_gr.status in ['left', 'kicked']: return False
+        chat_member_ch = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if chat_member_ch.status not in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER]:
+            return False
+        
+        # Check Group (Optional: Remove if you only want Channel check)
+        chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
+        if chat_member_gr.status not in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER]:
+            return False
+            
         return True
     except Exception as e:
-        logger.error(f"Join Check Error: {e}")
-        return True # Error aye to user ko rokna nahi chahiye
+        logger.error(f"Subscription check error (Make sure bot is admin in channel/group): {e}")
+        # If bot fails to check (e.g. not admin), allow access to avoid blocking users
+        return True 
+
+def get_movie_details(movie_id):
+    """Fetch movie details and qualities from DB."""
+    conn = get_db_connection()
+    if not conn: return None, []
+    
+    try:
+        cur = conn.cursor()
+        # Get Basic Info
+        cur.execute("SELECT title, file_id, url FROM movies WHERE id = %s", (movie_id,))
+        movie = cur.fetchone()
+        
+        if not movie: return None, []
+        
+        title, main_file_id, main_url = movie
+        
+        # Get Qualities (Assuming you have a movie_files table or similar logic)
+        # If you don't have a separate table, we just return the main file.
+        qualities = []
+        
+        # Check for 'movie_files' table existence or structure
+        try:
+            cur.execute("SELECT quality, file_id, url FROM movie_files WHERE movie_id = %s", (movie_id,))
+            rows = cur.fetchall()
+            for q, fid, url in rows:
+                qualities.append({'quality': q, 'file_id': fid, 'url': url})
+        except:
+            pass # Table might not exist
+            
+        # Add main file as "Default" if no qualities found, or list is empty
+        if not qualities:
+            if main_file_id:
+                qualities.append({'quality': '🎬 Watch/Download', 'file_id': main_file_id, 'url': None})
+            elif main_url:
+                qualities.append({'quality': '🔗 Stream Link', 'file_id': None, 'url': main_url})
+                
+        return title, qualities
+    finally:
+        if conn: conn.close()
 
 # ==================== HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /start and Deep Linking (Redirect from Group)"""
+    """
+    Handles /start and Deep Linking (e.g., /start getfile_123).
+    """
     user = update.effective_user
     chat_id = update.effective_chat.id
     args = context.args
 
-    # 1. Deep Link Handler (Jab user group se button daba ke aaye)
-    if args and args[0].startswith("get_"):
+    # --- 1. Handle Deep Link (File Delivery) ---
+    if args and args[0].startswith("getfile_"):
         movie_id = args[0].split("_")[1]
         
-        # Force Sub Check
-        joined = await is_user_joined(user.id, context)
-        if not joined:
-            buttons = [
-                [InlineKeyboardButton("📢 Join FlimfyBox", url=CHANNEL_LINK)],
-                [InlineKeyboardButton("💬 Join FlimfyBox Chat", url=GROUP_LINK)],
-                [InlineKeyboardButton("🔄 Try Again", url=f"https://t.me/{context.bot.username}?start=get_{movie_id}")]
-            ]
-            await update.message.reply_photo(
-                photo=START_IMG,
-                caption="⚠️ **Access Denied!**\n\nMovie pane ke liye Channels join karna zaroori hai.",
-                reply_markup=InlineKeyboardMarkup(buttons)
+        # CHECK SUBSCRIPTION FIRST
+        if not await is_user_subscribed(context.bot, user.id):
+            join_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK),
+                 InlineKeyboardButton("💬 Join Group", url=GROUP_LINK)],
+                [InlineKeyboardButton("🔄 Try Again", url=f"https://t.me/{context.bot.username}?start=getfile_{movie_id}")]
+            ])
+            msg = await update.message.reply_photo(
+                photo=START_IMG_URL,
+                caption=f"👋 Hello {user.first_name},\n\n❌ **You must join our Channel and Group to get this movie.**\n\n👇 Join below and click 'Try Again'.",
+                reply_markup=join_markup
             )
+            asyncio.create_task(delete_message_later(context, chat_id, msg.message_id, 120))
             return
 
-        # Fetch Qualities (Wahi purana logic)
-        qualities = get_all_movie_qualities(movie_id)
+        # Fetch and Send Movie
+        title, qualities = get_movie_details(movie_id)
         
-        if not qualities:
-            await update.message.reply_text("❌ Sorry, File database se delete ho gayi hai.")
+        if not title or not qualities:
+            await update.message.reply_text("❌ Movie data not found or deleted.")
             return
 
-        # Quality Buttons Banao
-        keyboard = []
-        for q_name, url, file_id in qualities:
-            # Data format: qual_<movie_id>_<index>
-            idx = qualities.index((q_name, url, file_id))
-            btn_text = f"🎬 {q_name}"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"qual_{movie_id}_{idx}")])
+        # If multiple qualities, show buttons
+        if len(qualities) > 1:
+            buttons = []
+            for q in qualities:
+                # Callback data: q_movieID_qualityIndex
+                idx = qualities.index(q)
+                btn_text = f"📂 {q['quality']}"
+                buttons.append([InlineKeyboardButton(btn_text, callback_data=f"qual_{movie_id}_{idx}")])
+            
+            markup = InlineKeyboardMarkup(buttons)
+            msg = await update.message.reply_photo(
+                photo=START_IMG_URL,
+                caption=f"🎬 **{title}**\n\nSelect quality to download:",
+                reply_markup=markup
+            )
+            # Note: Not auto-deleting the menu immediately, user needs time to pick
         
-        await update.message.reply_photo(
-            photo=START_IMG,
-            caption=f"✅ **File Found!**\n\nPlease select quality to download:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # If single file, send directly
+        else:
+            q = qualities[0]
+            await send_file_to_user(context, chat_id, q['file_id'], q['url'], title)
+
         return
 
-    # 2. Normal Start Message
-    buttons = [
-        [InlineKeyboardButton("📢 FlimfyBox", url=CHANNEL_LINK), InlineKeyboardButton("💬 FlimfyBox Chat", url=GROUP_LINK)],
-        [InlineKeyboardButton("🆘 Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
-    ]
-    await update.message.reply_photo(
-        photo=START_IMG,
-        caption="👋 **Hi, I am Ur Movie Bot!**\n\nAdd me to your group, I will provide movies there securely.\n\nJust type movie name in group!",
-        reply_markup=InlineKeyboardMarkup(buttons)
+    # --- 2. Normal Start Message ---
+    # Only reply if it's a private chat
+    if update.effective_chat.type == "private":
+        buttons = [
+            [InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK),
+             InlineKeyboardButton("💬 Group", url=GROUP_LINK)],
+            [InlineKeyboardButton("❓ Help", callback_data="help"),
+             InlineKeyboardButton("ℹ️ About", callback_data="about")]
+        ]
+        
+        txt = (
+            f"👋 **Hello {user.first_name}!**\n\n"
+            "I am **Ur Movie Bot** 🤖.\n"
+            "I can provide movies directly to your PM from our group.\n\n"
+            "👉 **How to use:**\n"
+            "1. Join our Group.\n"
+            "2. Type movie name there.\n"
+            "3. Click '📂 Get File Here'.\n\n"
+            "**Maintained by FlimfyBox**"
+        )
+        
+        await update.message.reply_photo(
+            photo=START_IMG_URL,
+            caption=txt,
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+async def send_file_to_user(context, chat_id, file_id, url, caption_title):
+    """Sends the actual file/link and schedules auto-delete."""
+    caption = (
+        f"🎬 <b>{caption_title}</b>\n\n"
+        f"⚠️ <i>This message will be deleted in {AUTO_DELETE_TIME} seconds. Forward it to save!</i>\n\n"
+        f"Join: {CHANNEL_USERNAME}"
     )
+    
+    sent_msg = None
+    try:
+        if file_id:
+            sent_msg = await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_id,
+                caption=caption,
+                parse_mode=ParseMode.HTML
+            )
+        elif url:
+            sent_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"{caption}\n\n🔗 <b>Link:</b> {url}",
+                parse_mode=ParseMode.HTML
+            )
+            
+        if sent_msg:
+            asyncio.create_task(delete_message_later(context, chat_id, sent_msg.message_id))
+            
+    except Exception as e:
+        logger.error(f"Error sending file: {e}")
+        await context.bot.send_message(chat_id, "❌ Error sending file. Contact Admin.")
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    GROUP MEIN:
-    - User msg karega.
-    - Bot search karega.
-    - Agar mila -> Button dega 'Get File Here' (Redirect to PM).
-    - Agar nahi mila -> CHUP rahega (Silent).
+    Listens to group messages.
+    If movie found -> Reply with 'Get File Here' button.
+    If not found -> DO NOTHING (Silent).
     """
-    msg = update.message.text
-    if not msg or msg.startswith("/"): return
+    msg_text = update.message.text
+    if not msg_text or msg_text.startswith("/"): return
     
-    # Search DB
-    movie = search_movie_in_db(msg)
-    
-    if movie:
-        bot_username = context.bot.username
-        # Deep link banaya
-        deep_link = f"https://t.me/{bot_username}?start=get_{movie['id']}"
+    # Clean query
+    query = re.sub(r'[^\w\s]', '', msg_text).strip()
+    if len(query) < 2: return
+
+    conn = get_db_connection()
+    if not conn: return
+
+    try:
+        cur = conn.cursor()
+        # Find movie (Fuzzy matching via SQL ILIKE logic first for speed)
+        # We check exact match or contains match
+        cur.execute("SELECT id, title FROM movies WHERE title ILIKE %s LIMIT 1", (f"%{query}%",))
+        result = cur.fetchone()
         
-        btn = [[InlineKeyboardButton("📂 Get File Here", url=deep_link)]]
-        
-        sent_msg = await update.message.reply_text(
-            f"🎬 **{movie['title']}** found!\n\n👇 Click below to get file in PM (Safe & Fast).",
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-        
-        # Auto Delete Group Msg
-        asyncio.create_task(delete_after_delay(context, update.effective_chat.id, [sent_msg.message_id]))
+        # If standard SQL match fails, you can add Python Fuzzy logic here if DB is small
+        # But for "i Papcorn" speed, SQL LIKE is better. 
+        # If you want strict fuzzy:
+        if not result:
+             cur.execute("SELECT id, title FROM movies")
+             all_movies = cur.fetchall()
+             best_match = None
+             highest_score = 0
+             
+             for mid, mtitle in all_movies:
+                 score = fuzz.token_sort_ratio(query.lower(), mtitle.lower())
+                 if score > 85: # Threshold
+                     if score > highest_score:
+                         highest_score = score
+                         best_match = (mid, mtitle)
+             
+             if best_match:
+                 result = best_match
+
+        # LOGIC: If found, send button. If not, RETURN (Stay Silent)
+        if result:
+            movie_id, movie_title = result
+            bot_username = context.bot.username
+            
+            # Deep link to start the bot
+            deep_link = f"https://t.me/{bot_username}?start=getfile_{movie_id}"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 Get File Here", url=deep_link)]
+            ])
+            
+            reply_msg = await update.message.reply_text(
+                f"✅ **Found:** {movie_title}\n\n👇 Click below to get the file in PM.",
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN,
+                quote=True
+            )
+            
+            # Auto delete the group prompt to keep group clean
+            asyncio.create_task(delete_message_later(context, update.effective_chat.id, reply_msg.message_id, 300)) # 5 mins
+
+        # ELSE: Pass (Do absolutely nothing)
+            
+    except Exception as e:
+        logger.error(f"Group Handler Error: {e}")
+    finally:
+        if conn: conn.close()
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles Quality Selection & Other Buttons"""
     query = update.callback_query
     data = query.data
     
-    # Handle Quality Selection
-    if data.startswith("qual_"):
-        # Format: qual_<movie_id>_<index>
-        try:
-            _, movie_id, idx = data.split("_")
-            idx = int(idx)
-            
-            qualities = get_all_movie_qualities(movie_id)
-            if idx >= len(qualities):
-                await query.answer("Link expired/invalid", show_alert=True)
-                return
-                
-            q_name, url, file_id = qualities[idx]
-            
-            caption = f"🎬 **Movie:** Found\n💿 **Quality:** {q_name}\n\n⚠️ *Auto-delete in 60s*"
-            
-            sent_msg = None
-            if file_id:
-                sent_msg = await context.bot.send_document(
-                    chat_id=query.message.chat_id,
-                    document=file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            elif url:
-                sent_msg = await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=f"{caption}\n\n🔗 **Link:** {url}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            
-            await query.answer("Sending file...")
-            
-            # Auto Delete File
-            if sent_msg:
-                asyncio.create_task(delete_after_delay(context, query.message.chat_id, [sent_msg.message_id], 60))
-                
-        except Exception as e:
-            logger.error(f"Callback Error: {e}")
-            await query.answer("Error fetching file", show_alert=True)
-
-    # Help/About
-    elif data == "help":
-        await query.message.edit_caption("Just add me to your group and type movie name!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back")]]))
+    if data == "help":
+        await query.answer()
+        await query.message.reply_text("🆘 **Help**\n\nJust type the movie name in our group, and if I have it, I will give you a button to download it!")
+        
     elif data == "about":
-        await query.message.edit_caption("Ur Movie Bot\nOwner: FlimfyBox", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back")]]))
-    elif data == "back":
-        # Wapis Start wale buttons
-        buttons = [
-            [InlineKeyboardButton("📢 FlimfyBox", url=CHANNEL_LINK), InlineKeyboardButton("💬 FlimfyBox Chat", url=GROUP_LINK)],
-            [InlineKeyboardButton("🆘 Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
-        ]
-        await query.message.edit_caption(caption="👋 **Hi, I am Ur Movie Bot!**", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.answer()
+        await query.message.reply_text("🤖 **About**\n\nName: Ur Movie Bot\nOwner: FlimfyBox Team")
 
-# ==================== FLASK SERVER ====================
+    elif data.startswith("qual_"):
+        # User selected a quality from the list
+        _, movie_id, qual_idx = data.split("_")
+        qual_idx = int(qual_idx)
+        
+        title, qualities = get_movie_details(movie_id)
+        if qualities and qual_idx < len(qualities):
+            q = qualities[qual_idx]
+            await query.answer(f"Sending {q['quality']}...")
+            await send_file_to_user(context, query.message.chat_id, q['file_id'], q['url'], title)
+            # Delete the menu message
+            await query.message.delete()
+        else:
+            await query.answer("❌ Expired or invalid.", show_alert=True)
+
+# ==================== FLASK (Keep alive) ====================
 app = Flask('')
 @app.route('/')
-def home(): return "Ur Movie Bot Running"
+def home(): return "Ur Movie Bot Is Running!"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 # ==================== MAIN ====================
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Group Handler - Sabse neeche taaki commands block na kare
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler))
-    
-    print("Bot Started...")
-    app.run_polling()
+    if not TELEGRAM_BOT_TOKEN:
+        print("Error: TELEGRAM_BOT_TOKEN not found.")
+        return
 
-if __name__ == "__main__":
+    # Start Flask
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    # Bot Setup
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # 1. Group Message Handler (Most Important)
+    # Filters: Text, Not Command, Is Group
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, group_message_handler))
+
+    # 2. Start & Deep Link Handler
+    application.add_handler(CommandHandler("start", start))
+
+    # 3. Callback Handler
+    application.add_handler(CallbackQueryHandler(callback_handler))
+
+    # Keep Admin commands if you need them to add movies, 
+    # otherwise remove them to keep code light. 
+    # (Included a dummy check here just to show where they go)
+    
+    print("🤖 Ur Movie Bot Started...")
+    application.run_polling()
+
+if __name__ == '__main__':
     main()
