@@ -5,6 +5,7 @@ try:
     FIXED_DATABASE_URL = getattr(db_utils, "FIXED_DATABASE_URL", None)
 except Exception:
     FIXED_DATABASE_URL = None
+
 # -*- coding: utf-8 -*-
 import os
 import threading
@@ -91,24 +92,6 @@ async def delete_message_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id
         logger.info(f"Deleted message {message_id} from chat {chat_id}")
     except Exception as e:
         logger.error(f"Failed to delete message {message_id}: {e}")
-
-async def check_user_joined(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
-    """Check if user is member of required channel and group"""
-    try:
-        # Check Channel Membership
-        channel_member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        if channel_member.status not in ["member", "administrator", "creator"]:
-            return False
-        
-        # Check Group Membership
-        group_member = await context.bot.get_chat_member(chat_id=f"@{GROUP_USERNAME}", user_id=user_id)
-        if group_member.status not in ["member", "administrator", "creator"]:
-            return False
-        
-        return True
-    except Exception as e:
-        logger.error(f"Error checking user membership: {e}")
-        return False
 
 # ==================== DATABASE FUNCTIONS ====================
 def setup_database():
@@ -337,39 +320,48 @@ def get_group_movie_button(movie_id: int):
     ])
     return keyboard
 
+def get_file_options_keyboard():
+    """Keyboard with Join Channel button for every file"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🔗 Join Channel", url=CHANNEL_LINK),
+            InlineKeyboardButton("👥 Join Group", url=GROUP_LINK)
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # ==================== MOVIE DELIVERY FUNCTIONS ====================
 async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, movie_data: tuple):
-    """Send movie file/link to user's PM"""
+    """Send movie file/link to user's PM with caption and buttons"""
     try:
         movie_id, title, url, file_id = movie_data
         chat_id = user_id
 
-        # Check if user joined required channels/groups
-        if not await check_user_joined(context, user_id):
-            msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ आपको पहले हमारे चैनल और ग्रुप में जॉइन करना होगा फ़ाइल पाने के लिए!",
-                reply_markup=get_join_prompt_keyboard()
-            )
-            asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
-            return
-
-        # Warning message
+        # Warning message (auto-delete)
         warning_msg = await context.bot.send_message(
             chat_id=chat_id,
-            text="⚠️ यह संदेश 1 मिनट के बाद ऑटो डिलीट हो जाएगा! कृपया जल्दी से फ़ाइल को दूसरे चैट में फॉरवर्ड कर लें।"
+            text="⚠️ ❌👉This file automatically❗️delete after 1 minute❗️so please forward in another chat👈❌",
+            parse_mode='Markdown'
         )
         asyncio.create_task(delete_message_after_delay(context, chat_id, warning_msg.message_id))
 
         sent_msg = None
-        caption = f"🎬 {title}\n\n📢 Join: {CHANNEL_LINK}\n👥 Group: {GROUP_LINK}"
+        # Caption as per your requirement
+        caption_text = (
+            f"🎬 <b>{title}</b>\n\n"
+            "🔗 <b>JOIN »</b> <a href='http://t.me/filmfybox'>FilmfyBox</a>\n\n"
+            "🔹 <b>Please drop the movie name, and I’ll find it for you as soon as possible. 🎬✨👇</b>\n"
+            "🔹 <b><a href='https://t.me/Filmfybox002'>FlimfyBox Chat</a></b>"
+        )
 
         # Send file if file_id exists
         if file_id:
             sent_msg = await context.bot.send_document(
                 chat_id=chat_id,
                 document=file_id,
-                caption=caption
+                caption=caption_text,
+                parse_mode='HTML',
+                reply_markup=get_file_options_keyboard()
             )
         
         # Send via URL if it's a Telegram channel link
@@ -382,20 +374,26 @@ async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, m
                     chat_id=chat_id,
                     from_chat_id=from_chat_id,
                     message_id=message_id,
-                    caption=caption
+                    caption=caption_text,
+                    parse_mode='HTML',
+                    reply_markup=get_file_options_keyboard()
                 )
             except Exception as e:
                 logger.error(f"Failed to copy channel message: {e}")
                 sent_msg = await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"🎬 {title}\n\n🔗 Link: {url}\n\n📢 Join: {CHANNEL_LINK}\n👥 Group: {GROUP_LINK}"
+                    text=f"🎬 {title}\n\n{caption_text}",
+                    parse_mode='HTML',
+                    reply_markup=get_file_options_keyboard()
                 )
         
         # Send normal URL
         else:
             sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🎬 {title}\n\n🔗 Link: {url}\n\n📢 Join: {CHANNEL_LINK}\n👥 Group: {GROUP_LINK}"
+                text=f"🎬 {title}\n\n{caption_text}",
+                parse_mode='HTML',
+                reply_markup=get_file_options_keyboard()
             )
 
         # Auto delete the movie message
@@ -520,7 +518,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ⚠️ नोट:
 - मूवी का नाम सही लिखें
-- चैनल और ग्रुप में जॉइन होना जरूरी है
 - सभी संदेश 1 मिनट के बाद ऑटो डिलीट हो जाते हैं
             """
             msg = await query.edit_message_caption(
@@ -539,7 +536,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ✅ फीचर्स:
 - ग्रुप से प्राइवेट चैट में फ़ाइल भेजना
 - सभी संदेश ऑटो डिलीट
-- चैनल और ग्रुप जॉइन चेक
 - उच्च सटीकता वाला सearch
 
 📢 चैनल: {CHANNEL_LINK}
@@ -554,19 +550,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
         elif query.data == "check_membership":
-            user_id = query.from_user.id
-            if await check_user_joined(context, user_id):
-                msg = await query.edit_message_text(
-                    text="✅ आपको चैनल और ग्रुप में जॉइन होने का स्टेटस कन्फर्म हुआ!",
-                    reply_markup=None
-                )
-                asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
-            else:
-                msg = await query.edit_message_text(
-                    text="❌ आप अभी भी चैनल या ग्रुप में जॉइन नहीं हुए हैं!",
-                    reply_markup=get_join_prompt_keyboard()
-                )
-                asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
+            # Always return True — skip membership check (no admin required)
+            msg = await query.edit_message_text(
+                text="✅ आपको चैनल और ग्रुप में जॉइन होने का स्टेटस कन्फर्म हुआ!",
+                reply_markup=None
+            )
+            asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
     except Exception as e:
         logger.error(f"Error in button callback: {e}")
