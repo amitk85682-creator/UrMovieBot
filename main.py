@@ -57,11 +57,18 @@ REQUIRED_GROUP_ID = os.environ.get('REQUIRED_GROUP_ID', '@Filmfybox002')
 FILMFYBOX_CHANNEL_URL = 'https://t.me/filmfybox'
 FILMFYBOX_GROUP_URL = 'https://t.me/Filmfybox002'
 
+# Bot Logo Image
+BOT_LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEj35aShWJb06jx7Kz_v5hum9RJnhFF7DK1djZor59xWvCjBGRBh_NNjAgBi-IEhG5fSTPEt24gC9wsMVw_suit8hgmAC7SPbCwuh_gk4jywJlC2OCYJYvu6CoorlndlUITqBpIowR7xMA7AF-JQsponc_TUP1U95N2lobnUdK0W9kA9cGadqbRNNd1d5Fo/s1600/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg"
+
 # Rate limiting
 user_last_request = defaultdict(lambda: datetime.min)
 REQUEST_COOLDOWN_MINUTES = int(os.environ.get('REQUEST_COOLDOWN_MINUTES', '10'))
 SIMILARITY_THRESHOLD = int(os.environ.get('SIMILARITY_THRESHOLD', '80'))
 MAX_REQUESTS_PER_MINUTE = int(os.environ.get('MAX_REQUESTS_PER_MINUTE', '10'))
+
+# Message auto-delete time (seconds)
+MESSAGE_DELETE_TIME = 300  # 5 minutes for normal messages
+FILE_DELETE_TIME = 60  # 60 seconds for files
 
 # Validate required environment variables
 if not TELEGRAM_BOT_TOKEN:
@@ -102,12 +109,12 @@ def _normalize_title_for_match(title: str) -> str:
 def is_series(title):
     """Check if title is a series based on patterns"""
     series_patterns = [
-        r'S\d+\s*E\d+',  # S01E01, S1E1
-        r'Season\s*\d+',  # Season 1
-        r'Episode\s*\d+', # Episode 1
-        r'EP?\s*\d+',     # E01, EP01
-        r'Part\s*\d+',    # Part 1
-        r'\d+x\d+',       # 1x01
+        r'S\d+\s*E\d+',
+        r'Season\s*\d+',
+        r'Episode\s*\d+',
+        r'EP?\s*\d+',
+        r'Part\s*\d+',
+        r'\d+x\d+',
     ]
     return any(re.search(pattern, title, re.IGNORECASE) for pattern in series_patterns)
 
@@ -120,7 +127,6 @@ def parse_series_info(title):
         'is_series': False
     }
     
-    # Try to extract season and episode
     match = re.search(r'S(\d+)\s*E(\d+)', title, re.IGNORECASE)
     if match:
         info['season'] = int(match.group(1))
@@ -129,7 +135,6 @@ def parse_series_info(title):
         info['is_series'] = True
         return info
     
-    # Try other patterns
     match = re.search(r'Season\s*(\d+).*Episode\s*(\d+)', title, re.IGNORECASE)
     if match:
         info['season'] = int(match.group(1))
@@ -138,6 +143,27 @@ def parse_series_info(title):
         info['is_series'] = True
         
     return info
+
+# ==================== AUTO-DELETE HELPER ====================
+async def auto_delete_message(context, chat_id, message_id, delay=MESSAGE_DELETE_TIME):
+    """Auto-delete a single message after delay"""
+    try:
+        await asyncio.sleep(delay)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logger.error(f"Failed to auto-delete message {message_id}: {e}")
+
+async def delete_messages_after_delay(context, chat_id, message_ids, delay=FILE_DELETE_TIME):
+    """Delete multiple messages after delay"""
+    try:
+        await asyncio.sleep(delay)
+        for msg_id in message_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.error(f"Failed to delete message {msg_id}: {e}")
+    except Exception as e:
+        logger.error(f"Error in delete_messages_after_delay: {e}")
 
 # ==================== FORCE JOIN CHECK ====================
 async def check_user_membership(context: ContextTypes.DEFAULT_TYPE, user_id: int):
@@ -159,9 +185,29 @@ async def check_user_membership(context: ContextTypes.DEFAULT_TYPE, user_id: int
 def get_force_join_keyboard():
     """Get keyboard for force join prompt"""
     keyboard = [
-        [InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)],
-        [InlineKeyboardButton("💬 Join Group", url=FILMFYBOX_GROUP_URL)],
+        [
+            InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL),
+            InlineKeyboardButton("💬 Join Group", url=FILMFYBOX_GROUP_URL)
+        ],
         [InlineKeyboardButton("✅ I Joined, Check Again", callback_data="check_membership")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_main_menu_keyboard():
+    """Get main menu keyboard for /start"""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{os.environ.get('BOT_USERNAME', 'your_bot')}?startgroup=true"),
+            InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL)
+        ],
+        [
+            InlineKeyboardButton("💬 Discussion Group", url=FILMFYBOX_GROUP_URL),
+            InlineKeyboardButton("ℹ️ About", callback_data="about_bot")
+        ],
+        [
+            InlineKeyboardButton("❓ Help", callback_data="help_bot"),
+            InlineKeyboardButton("🔍 Search Tips", callback_data="search_tips")
+        ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -212,23 +258,23 @@ def get_movies_from_db(user_query, limit=10):
             conn.close()
             return []
         
-        movie_titles = [movie[1] for movie in all_movies]
-        movie_dict = {movie[1]: movie for movie in all_movies}
+        movie_titles = [movie<!--citation:1--> for movie in all_movies]
+        movie_dict = {movie<!--citation:1-->: movie for movie in all_movies}
         
         matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
         
         filtered_movies = []
         for match in matches:
             if len(match) >= 2:
-                title, score = match[0], match[1]
+                title, score = match, match<!--citation:1-->
                 if score >= 65 and title in movie_dict:
                     movie_data = movie_dict[title]
                     filtered_movies.append((
-                        movie_data[0],  # id
-                        movie_data[1],  # title
-                        movie_data[2],  # url
-                        movie_data[3],  # file_id
-                        is_series(movie_data[1])  # is_series check
+                        movie_data,
+                        movie_data<!--citation:1-->,
+                        movie_data<!--citation:2-->,
+                        movie_data<!--citation:3-->,
+                        is_series(movie_data<!--citation:1-->)
                     ))
         
         cur.close()
@@ -254,7 +300,6 @@ def get_all_movie_qualities(movie_id):
     try:
         cur = conn.cursor()
         
-        # Get from movie_files table
         cur.execute("""
             SELECT quality, url, file_id, file_size
             FROM movie_files
@@ -273,17 +318,14 @@ def get_all_movie_qualities(movie_id):
         
         quality_results = cur.fetchall()
         
-        # Get main URL from movies table
         cur.execute("SELECT url FROM movies WHERE id = %s", (movie_id,))
         main_res = cur.fetchone()
         
         final_results = []
         
-        # Add main URL if exists
-        if main_res and main_res[0] and main_res[0].strip():
-            final_results.append(('📺 Stream / Watch Online', main_res[0].strip(), None, None))
+        if main_res and main_res and main_res.strip():
+            final_results.append(('🎬 Watch Online', main_res.strip(), None, None))
         
-        # Add quality options
         for quality, url, file_id, file_size in quality_results:
             final_results.append((quality, url, file_id, file_size))
         
@@ -306,7 +348,6 @@ def get_series_episodes(base_title):
     try:
         cur = conn.cursor()
         
-        # Find all episodes for this series
         cur.execute("""
             SELECT id, title FROM movies 
             WHERE title LIKE %s AND (
@@ -319,7 +360,6 @@ def get_series_episodes(base_title):
         
         episodes = cur.fetchall()
         
-        # Organize by season
         seasons = defaultdict(list)
         for ep_id, title in episodes:
             info = parse_series_info(title)
@@ -330,7 +370,6 @@ def get_series_episodes(base_title):
                     'episode': info['episode'] or 0
                 })
         
-        # Sort episodes within each season
         for season in seasons:
             seasons[season].sort(key=lambda x: x['episode'])
         
@@ -344,9 +383,9 @@ def get_series_episodes(base_title):
         if conn:
             conn.close()
 
-# ==================== NETFLIX-STYLE KEYBOARDS ====================
+# ==================== PREMIUM KEYBOARDS ====================
 def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
-    """Create Netflix-style movie selection keyboard"""
+    """Create premium movie selection keyboard"""
     start_idx = page * movies_per_page
     end_idx = start_idx + movies_per_page
     current_movies = movies[start_idx:end_idx]
@@ -355,11 +394,10 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
     
     for movie in current_movies:
         movie_id, title, url, file_id, is_series_flag = movie
-        emoji = "📺" if is_series_flag else "🎬"
+        emoji = "🎭" if is_series_flag else "🎬"
         button_text = f"{emoji} {title}" if len(title) <= 35 else f"{emoji} {title[:32]}..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"select_{movie_id}")])
     
-    # Navigation
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"page_{page-1}"))
@@ -374,15 +412,14 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
     return InlineKeyboardMarkup(keyboard)
 
 def create_quality_selection_keyboard(movie_id, title, qualities):
-    """Create Netflix-style quality selection keyboard"""
+    """Create premium quality selection keyboard"""
     keyboard = []
     
     for quality, url, file_id, file_size in qualities:
         size_text = f" • {file_size}" if file_size else ""
-        link_type = "📱" if file_id else "🔗"
+        link_type = "📱" if file_id else "🌐"
         button_text = f"{link_type} {quality}{size_text}"
         
-        # Make quality value URL-safe for callback data
         safe_quality = quality.replace(' ', '_').replace('/', '_')
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{movie_id}_{safe_quality}")])
     
@@ -391,12 +428,12 @@ def create_quality_selection_keyboard(movie_id, title, qualities):
     return InlineKeyboardMarkup(keyboard)
 
 def create_season_selection_keyboard(seasons_data, base_title):
-    """Create season selection keyboard for series"""
+    """Create season selection keyboard"""
     keyboard = []
     
     for season_num in sorted(seasons_data.keys()):
         episodes = seasons_data[season_num]
-        button_text = f"📂 Season {season_num} ({len(episodes)} episodes)"
+        button_text = f"📂 Season {season_num} • {len(episodes)} Episodes"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"season_{season_num}_{base_title[:30]}")])
     
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
@@ -418,46 +455,54 @@ def create_episode_selection_keyboard(episodes, season_num):
 
 # ==================== SEND MOVIE WITH AUTO-DELETE ====================
 async def send_movie_file(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str, url: Optional[str] = None, file_id: Optional[str] = None):
-    """Send movie file with auto-delete"""
+    """Send movie file with premium styling and auto-delete"""
     chat_id = update.effective_chat.id
     
-    # Check membership
+    # Check membership first
     is_member = await check_user_membership(context, update.effective_user.id)
     if not is_member:
-        await context.bot.send_message(
+        msg = await context.bot.send_message(
             chat_id=chat_id,
             text=(
                 "🚫 **Access Denied**\n\n"
-                "To watch movies, you must join our:\n"
-                "📢 Channel: @filmfybox\n"
-                "💬 Group: @Filmfybox002"
+                "⚡ To unlock premium content, join:\n\n"
+                "📢 **Channel:** [FilmfyBox](https://t.me/filmfybox)\n"
+                "💬 **Group:** [FilmfyBox Chat](https://t.me/Filmfybox002)\n\n"
+                "🎬 Unlimited movies & series await!"
             ),
             reply_markup=get_force_join_keyboard(),
             parse_mode='Markdown'
         )
+        asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, MESSAGE_DELETE_TIME))
         return
     
     try:
-        # Warning message
+        # Premium warning message
         warning_msg = await context.bot.send_message(
             chat_id=chat_id,
-            text="⚠️ **File will auto-delete in 60 seconds!**\n\nPlease forward it to saved messages.",
+            text=(
+                "⚡ **Premium File Delivery**\n\n"
+                "⏰ Auto-deletes in **60 seconds**\n"
+                "💾 Forward to Saved Messages now!\n\n"
+                "🎬 Enjoy your movie! ✨"
+            ),
             parse_mode='Markdown'
         )
         
-        # Netflix-style caption
+        # Premium caption with animated emojis
         caption = (
             f"🎬 **{title}**\n\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"📢 Channel: [FilmfyBox]({FILMFYBOX_CHANNEL_URL})\n"
-            f"💬 Group: [FilmfyBox Chat]({FILMFYBOX_GROUP_URL})\n"
+            f"⚡ **Premium Content**\n"
+            f"📺 Quality: HD/Full HD\n"
             f"━━━━━━━━━━━━━━━━━\n\n"
-            f"⏰ Auto-delete in: 60 seconds"
+            f"📢 [Join Channel]({FILMFYBOX_CHANNEL_URL})\n"
+            f"💬 [Join Group]({FILMFYBOX_GROUP_URL})\n\n"
+            f"⏰ Auto-delete: **60s** ⚡"
         )
         
         sent_msg = None
         
-        # Send file based on type
         if file_id:
             sent_msg = await context.bot.send_document(
                 chat_id=chat_id,
@@ -479,9 +524,13 @@ async def send_movie_file(update: Update, context: ContextTypes.DEFAULT_TYPE, ti
                 )
             except Exception as e:
                 logger.error(f"Copy failed: {e}")
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 Watch Now", url=url)
+                ]])
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"🔗 **{title}**\n\n[Click here to watch]({url})",
+                    text=f"🎬 **{title}**\n\n[Click to watch]({url})",
+                    reply_markup=keyboard,
                     parse_mode='Markdown'
                 )
                 return
@@ -499,30 +548,36 @@ async def send_movie_file(update: Update, context: ContextTypes.DEFAULT_TYPE, ti
                 )
             except Exception as e:
                 logger.error(f"Public copy failed: {e}")
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 Watch Now", url=url)
+                ]])
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"🔗 **{title}**\n\n[Click here to watch]({url})",
+                    text=f"🎬 **{title}**\n\n[Click to watch]({url})",
+                    reply_markup=keyboard,
                     parse_mode='Markdown'
                 )
                 return
         elif url:
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🎬 Watch Now", url=url),
-                InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
+                InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL)
             ]])
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=caption,
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
+            asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, MESSAGE_DELETE_TIME))
             return
         else:
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ Sorry, no file available for **{title}**",
+                text=f"❌ Sorry, **{title}** is not available right now.",
                 parse_mode='Markdown'
             )
+            asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, MESSAGE_DELETE_TIME))
             return
         
         # Auto-delete after 60 seconds
@@ -532,33 +587,50 @@ async def send_movie_file(update: Update, context: ContextTypes.DEFAULT_TYPE, ti
                     context,
                     chat_id,
                     [warning_msg.message_id, sent_msg.message_id],
-                    60
+                    FILE_DELETE_TIME
                 )
             )
     
     except Exception as e:
         logger.error(f"Error sending file: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="❌ Failed to send file.")
-
-async def delete_messages_after_delay(context, chat_id, message_ids, delay=60):
-    """Delete messages after delay"""
-    try:
-        await asyncio.sleep(delay)
-        for msg_id in message_ids:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
-                logger.error(f"Failed to delete message {msg_id}: {e}")
-    except Exception as e:
-        logger.error(f"Error in delete_messages_after_delay: {e}")
+        msg = await context.bot.send_message(chat_id=chat_id, text="❌ Failed to send file.")
+        asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, MESSAGE_DELETE_TIME))
 
 # ==================== BOT HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command"""
+    """Premium /start command with image and buttons"""
+    user = update.effective_user
+    
+    # Check membership
+    is_member = await check_user_membership(context, user.id)
+    
+    if not is_member:
+        # Force join prompt
+        msg = await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=BOT_LOGO_URL,
+            caption=(
+                f"👋 **Hey {user.first_name}!**\n\n"
+                f"🎬 Welcome to **Ur Movie Bot**\n\n"
+                f"🎭 **10,000+ Movies**\n"
+                f"📺 **5,000+ Series**\n"
+                f"🎥 **HD/Full HD Quality**\n\n"
+                f"━━━━━━━━━━━━━━━━━\n"
+                f"📢 Join our Channel\n"
+                f"💬 Join our Group\n"
+                f"━━━━━━━━━━━━━━━━━\n\n"
+                f"⚡ Join now and start watching!"
+            ),
+            reply_markup=get_force_join_keyboard(),
+            parse_mode='Markdown'
+        )
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
+        return MAIN_MENU
+    
     # Handle deep link
-    if context.args and context.args[0].startswith("movie_"):
+    if context.args and context.args.startswith("movie_"):
         try:
-            movie_id = int(context.args[0].split('_')[1])
+            movie_id = int(context.args.split('_')<!--citation:1-->)
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
@@ -574,139 +646,158 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Deep link error: {e}")
     
-    # Welcome message
-    welcome_text = (
-        "🎬 **Welcome to FilmfyBox!**\n\n"
-        "Your Netflix-style Movie & Series Bot! 🍿\n\n"
-        "📌 **How to use:**\n"
-        "• Send any movie/series name\n"
-        "• Get multiple quality options\n"
-        "• Enjoy auto-organized content\n\n"
-        "💡 **Examples:**\n"
-        "`Avengers Endgame`\n"
-        "`Stranger Things S01 E01`\n\n"
-        "🔍 Just type and search!"
+    # Welcome message with premium image
+    msg = await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=BOT_LOGO_URL,
+        caption=(
+            f"👋 **Hey {user.first_name}!**\n\n"
+            f"⚡ Welcome to **Ur Movie Bot** ⚡\n\n"
+            f"🎬 Your personal Netflix! 🍿\n\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"📚 **10,000+ Movies**\n"
+            f"📺 **5,000+ Series**\n"
+            f"🎥 **HD Quality**\n"
+            f"⚡ **Fast Delivery**\n"
+            f"━━━━━━━━━━━━━━━━━\n\n"
+            f"💡 **How to use:**\n"
+            f"• Type movie/series name\n"
+            f"• Select from results\n"
+            f"• Choose quality\n"
+            f"• Enjoy! ✨\n\n"
+            f"🔍 **Examples:**\n"
+            f"`Avengers Endgame`\n"
+            f"`Stranger Things S01 E01`\n"
+            f"`The Dark Knight`\n\n"
+            f"⚡ Start searching now!"
+        ),
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode='Markdown'
     )
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
     return MAIN_MENU
 
 async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search movies/series handler"""
+    """Search movies/series handler with auto-delete"""
     try:
         if not await check_rate_limit(update.effective_user.id):
-            await update.message.reply_text("⚠️ Please wait before searching again.")
+            msg = await update.message.reply_text("⏰ Please wait before searching again.")
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, 30))
             return MAIN_MENU
         
         user_message = update.message.text.strip()
+        
+        # Delete user's message
+        try:
+            await update.message.delete()
+        except:
+            pass
         
         # Search in database
         movies_found = get_movies_from_db(user_message, limit=10)
         
         if not movies_found:
-            # Silent in groups
             if update.effective_chat.type != "private":
                 return MAIN_MENU
             
-            # Not found message
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔍 Search Tips", callback_data="search_tips"),
-                InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
+                InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL)
             ]])
             
-            await update.message.reply_text(
-                f"😔 **Not Found!**\n\n"
-                f"'{user_message}' is not in our collection yet.\n\n"
-                f"💡 **Tips:**\n"
-                f"• Check spelling\n"
-                f"• Try full movie name\n"
-                f"• Add year for better results",
+            msg = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    f"😔 **Not Found!**\n\n"
+                    f"'{user_message}' isn't in our collection yet.\n\n"
+                    f"💡 **Tips:**\n"
+                    f"• Check spelling\n"
+                    f"• Try full name\n"
+                    f"• Add year (e.g., 2023)\n\n"
+                    f"🔍 Try again with correct name!"
+                ),
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
             return MAIN_MENU
         
         elif len(movies_found) == 1:
-            # Single result
-            movie_id, title, url, file_id, is_series_flag = movies_found[0]
+            movie_id, title, url, file_id, is_series_flag = movies_found
             
             if is_series_flag:
-                # Handle series
                 info = parse_series_info(title)
                 if info['is_series'] and info['base_title']:
-                    # Get all episodes
                     seasons_data = get_series_episodes(info['base_title'])
                     if seasons_data:
                         context.user_data['series_data'] = seasons_data
                         context.user_data['base_title'] = info['base_title']
                         
-                        await update.message.reply_text(
-                            f"📺 **{info['base_title']}**\n\nSelect Season ⬇️",
+                        msg = await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
                             reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
                             parse_mode='Markdown'
                         )
+                        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
                         return MAIN_MENU
             
-            # Movie - show quality options
             qualities = get_all_movie_qualities(movie_id)
             if qualities and len(qualities) > 1:
-                await update.message.reply_text(
-                    f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                msg = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"🎬 **{title}**\n\n⬇️ Select Quality:",
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                     parse_mode='Markdown'
                 )
+                asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
             elif qualities:
-                # Single quality - send directly
-                quality, url_q, file_id_q, _ = qualities[0]
+                quality, url_q, file_id_q, _ = qualities
                 await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
             else:
-                # No qualities - send main file
                 await send_movie_file(update, context, title, url, file_id)
         
         else:
-            # Multiple results
             context.user_data['search_results'] = movies_found
-            await update.message.reply_text(
-                f"🔍 **Found {len(movies_found)} results**\n\nSelect one ⬇️",
+            msg = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"🔍 **Found {len(movies_found)} results**\n\n⬇️ Select one:",
                 reply_markup=create_movie_selection_keyboard(movies_found),
                 parse_mode='Markdown'
             )
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
         
         return MAIN_MENU
     
     except Exception as e:
         logger.error(f"Error in search: {e}")
         if update.effective_chat.type == "private":
-            await update.message.reply_text("❌ Something went wrong.")
+            msg = await update.message.reply_text("❌ Something went wrong.")
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
         return MAIN_MENU
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Silent group handler - only respond to exact matches"""
+    """Silent group handler"""
     if not update.message or not update.message.text or update.message.from_user.is_bot:
         return
     
     message_text = update.message.text.strip()
     user = update.effective_user
     
-    # Ignore short messages and commands
     if len(message_text) < 4 or message_text.startswith('/'):
         return
     
-    # Search for exact match
     movies_found = get_movies_from_db(message_text, limit=1)
     
     if not movies_found:
-        # SILENT - no response
         return
     
-    # Check match confidence
-    movie_id, title, _, _, is_series_flag = movies_found[0]
+    movie_id, title, _, _, is_series_flag = movies_found
     score = fuzz.token_sort_ratio(_normalize_title_for_match(message_text), _normalize_title_for_match(title))
     
     if score < 85:
-        # Not confident - stay silent
         return
     
-    # High confidence match - send prompt
     emoji = "📺" if is_series_flag else "🎬"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"✅ Get {emoji}", callback_data=f"group_get_{movie_id}_{user.id}")
@@ -716,12 +807,11 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         reply_msg = await update.message.reply_text(
             f"Hey {user.mention_markdown()}! 👋\n\n"
             f"{emoji} **{title}**\n\n"
-            f"Click to get it in PM ⬇️",
+            f"⚡ Click to get in PM ⬇️",
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
         
-        # Auto-delete after 2 minutes
         asyncio.create_task(
             delete_messages_after_delay(context, update.effective_chat.id, [reply_msg.message_id], 120)
         )
@@ -734,58 +824,147 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
-        # Check membership
+        # Check membership callback
         if query.data == "check_membership":
             is_member = await check_user_membership(context, query.from_user.id)
             if is_member:
-                await query.edit_message_text(
-                    "✅ **Access Granted!**\n\n"
-                    "Welcome to FilmfyBox! 🎬\n"
-                    "You can now search for movies and series.",
+                await query.edit_message_caption(
+                    caption=(
+                        "✅ **Access Granted!**\n\n"
+                        "⚡ Welcome to Ur Movie Bot!\n\n"
+                        "🎬 You can now search for any movie or series.\n\n"
+                        "💡 Just type the name and enjoy! ✨"
+                    ),
+                    reply_markup=get_main_menu_keyboard(),
                     parse_mode='Markdown'
                 )
             else:
                 await query.answer("❌ Please join both Channel and Group first!", show_alert=True)
             return
         
+        # About bot
+        if query.data == "about_bot":
+            await query.edit_message_caption(
+                caption=(
+                    "ℹ️ **About Ur Movie Bot**\n\n"
+                    "⚡ Premium Telegram Bot for Movies & Series\n\n"
+                    "📊 **Stats:**\n"
+                    "🎬 10,000+ Movies\n"
+                    "📺 5,000+ Series\n"
+                    "🎥 HD/Full HD Quality\n"
+                    "⚡ Fast Delivery\n\n"
+                    "👨‍💻 **Developer:** @YourUsername\n"
+                    "📢 **Channel:** @filmfybox\n"
+                    "💬 **Group:** @Filmfybox002\n\n"
+                    "⚡ Powered by AI & Premium Servers"
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Help bot
+        if query.data == "help_bot":
+            await query.edit_message_caption(
+                caption=(
+                    "❓ **How to Use**\n\n"
+                    "**Step 1:** Join Channel & Group ✅\n"
+                    "**Step 2:** Type movie/series name 🔍\n"
+                    "**Step 3:** Select from results 📋\n"
+                    "**Step 4:** Choose quality 🎥\n"
+                    "**Step 5:** Enjoy! 🍿\n\n"
+                    "━━━━━━━━━━━━━━━━━\n\n"
+                    "**💡 Examples:**\n"
+                    "`Avengers Endgame`\n"
+                    "`Breaking Bad S01 E01`\n"
+                    "`Inception 2010`\n\n"
+                    "**📝 Tips:**\n"
+                    "• Use correct spelling\n"
+                    "• Add year for accuracy\n"
+                    "• For series: Include S and E numbers\n\n"
+                    "⚡ Need more help? Contact admin!"
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return
+        
         # Search tips
         if query.data == "search_tips":
-            tips_text = (
-                "🔍 **Search Tips**\n\n"
-                "✅ **Good Examples:**\n"
-                "• `Inception 2010`\n"
-                "• `Breaking Bad S01 E01`\n"
-                "• `Stranger Things`\n\n"
-                "❌ **Avoid:**\n"
-                "• Don't use emojis\n"
-                "• Don't add 'movie' or 'download'\n"
-                "• Check spelling on Google first\n\n"
-                "💡 Pro tip: Copy exact name from Google!"
+            await query.edit_message_text(
+                text=(
+                    "🔍 **Search Tips**\n\n"
+                    "✅ **Good Examples:**\n"
+                    "• `Inception 2010`\n"
+                    "• `Breaking Bad S01 E01`\n"
+                    "• `The Dark Knight`\n\n"
+                    "❌ **Avoid:**\n"
+                    "• Emojis (🎬, ❤️)\n"
+                    "• Words like 'download', 'watch'\n"
+                    "• Wrong spelling\n\n"
+                    "💡 **Pro Tips:**\n"
+                    "• Copy name from Google/IMDB\n"
+                    "• Add release year\n"
+                    "• For series: Use S01 E01 format\n\n"
+                    "⚡ Happy searching!"
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="cancel_selection")
+                ]]),
+                parse_mode='Markdown'
             )
-            await query.edit_message_text(tips_text, parse_mode='Markdown')
+            return
+        
+        # Back to start
+        if query.data == "back_to_start":
+            user = query.from_user
+            await query.edit_message_caption(
+                caption=(
+                    f"👋 **Hey {user.first_name}!**\n\n"
+                    f"⚡ Welcome to **Ur Movie Bot** ⚡\n\n"
+                    f"🎬 Your personal Netflix! 🍿\n\n"
+                    f"━━━━━━━━━━━━━━━━━\n"
+                    f"📚 **10,000+ Movies**\n"
+                    f"📺 **5,000+ Series**\n"
+                    f"🎥 **HD Quality**\n"
+                    f"⚡ **Fast Delivery**\n"
+                    f"━━━━━━━━━━━━━━━━━\n\n"
+                    f"💡 **How to use:**\n"
+                    f"• Type movie/series name\n"
+                    f"• Select from results\n"
+                    f"• Choose quality\n"
+                    f"• Enjoy! ✨\n\n"
+                    f"⚡ Start searching now!"
+                ),
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode='Markdown'
+            )
             return
         
         # Group get
         if query.data.startswith("group_get_"):
             parts = query.data.split('_')
-            movie_id = int(parts[2])
-            original_user_id = int(parts[3])
+            movie_id = int(parts<!--citation:2-->)
+            original_user_id = int(parts<!--citation:3-->)
             
             if query.from_user.id != original_user_id:
                 await query.answer("This button is not for you!", show_alert=True)
                 return
             
-            # Check membership first
             is_member = await check_user_membership(context, original_user_id)
             if not is_member:
                 await query.edit_message_text(
-                    "🚫 **Join Required!**\n\nPlease join our Channel and Group first.",
+                    "🚫 **Join Required!**\n\n"
+                    "Please join our Channel and Group first.",
                     reply_markup=get_force_join_keyboard()
                 )
                 return
             
             try:
-                # Send to PM
                 conn = get_db_connection()
                 if conn:
                     cur = conn.cursor()
@@ -797,7 +976,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if movie_data:
                         title, url, file_id = movie_data
                         
-                        # Check if series
                         if is_series(title):
                             info = parse_series_info(title)
                             seasons_data = get_series_episodes(info['base_title'])
@@ -805,26 +983,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 context.user_data['series_data'] = seasons_data
                                 context.user_data['base_title'] = info['base_title']
                                 
-                                await context.bot.send_message(
+                                msg = await context.bot.send_message(
                                     chat_id=original_user_id,
-                                    text=f"📺 **{info['base_title']}**\n\nSelect Season ⬇️",
+                                    text=f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
                                     reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
                                     parse_mode='Markdown'
                                 )
+                                asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
                                 await query.edit_message_text("✅ Check your PM!")
                                 return
                         
-                        # Check qualities
                         qualities = get_all_movie_qualities(movie_id)
                         if qualities and len(qualities) > 1:
-                            await context.bot.send_message(
+                            msg = await context.bot.send_message(
                                 chat_id=original_user_id,
-                                text=f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                                text=f"🎬 **{title}**\n\n⬇️ Select Quality:",
                                 reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                                 parse_mode='Markdown'
                             )
+                            asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
                         else:
-                            # Create dummy update for send function
                             dummy_update = Update(
                                 update_id=0,
                                 message=telegram.Message(
@@ -836,8 +1014,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await send_movie_file(dummy_update, context, title, url, file_id)
                         
                         await query.edit_message_text("✅ Check your PM!")
-                    else:
-                        await query.edit_message_text("❌ Movie not found!")
                         
             except telegram.error.Forbidden:
                 bot_username = (await context.bot.get_me()).username
@@ -876,17 +1052,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             context.user_data['base_title'] = info['base_title']
                             
                             await query.edit_message_text(
-                                f"📺 **{info['base_title']}**\n\nSelect Season ⬇️",
+                                f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
                                 reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
                                 parse_mode='Markdown'
                             )
                             return
                     
-                    # Movie - show qualities
                     qualities = get_all_movie_qualities(movie_id)
                     if qualities and len(qualities) > 1:
                         await query.edit_message_text(
-                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                            f"🎬 **{title}**\n\n⬇️ Select Quality:",
                             reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                             parse_mode='Markdown'
                         )
@@ -898,20 +1073,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Season selection
         if query.data.startswith("season_"):
             parts = query.data.split('_', 2)
-            season_num = int(parts[1])
+            season_num = int(parts<!--citation:1-->)
             
             seasons_data = context.user_data.get('series_data', {})
             episodes = seasons_data.get(season_num, [])
             
             if episodes:
                 await query.edit_message_text(
-                    f"📺 Season {season_num}\n\nSelect Episode ⬇️",
+                    f"📺 **Season {season_num}**\n\n⬇️ Select Episode:",
                     reply_markup=create_episode_selection_keyboard(episodes, season_num),
                     parse_mode='Markdown'
                 )
             return
         
-        # Episode selection (reuses movie_ callback)
+        # Episode/movie selection
         if query.data.startswith("movie_") and not query.data.startswith("movie_{"):
             movie_id = int(query.data.replace("movie_", ""))
             
@@ -929,7 +1104,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if qualities and len(qualities) > 1:
                         await query.edit_message_text(
-                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                            f"🎬 **{title}**\n\n⬇️ Select Quality:",
                             reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                             parse_mode='Markdown'
                         )
@@ -941,26 +1116,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Quality selection
         if query.data.startswith("quality_"):
             parts = query.data.split('_', 2)
-            movie_id = int(parts[1])
-            selected_quality = parts[2].replace('_', ' ')
+            movie_id = int(parts<!--citation:1-->)
+            selected_quality = parts<!--citation:2-->.replace('_', ' ')
             
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
                 
-                # Get movie title
                 cur.execute("SELECT title FROM movies WHERE id = %s", (movie_id,))
                 title_res = cur.fetchone()
-                title = title_res[0] if title_res else "Movie"
+                title = title_res if title_res else "Movie"
                 
-                # Get specific quality file
                 cur.execute("""
                     SELECT url, file_id FROM movie_files
                     WHERE movie_id = %s AND quality = %s
                 """, (movie_id, selected_quality))
                 file_data = cur.fetchone()
                 
-                # Fallback to main movie URL if quality not in movie_files
                 if not file_data:
                     cur.execute("SELECT url, file_id FROM movies WHERE id = %s", (movie_id,))
                     file_data = cur.fetchone()
@@ -970,19 +1142,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if file_data:
                     url, file_id = file_data
-                    await query.edit_message_text(f"📤 Sending **{title}** [{selected_quality}]...", parse_mode='Markdown')
+                    await query.edit_message_text(f"⚡ Sending **{title}** [{selected_quality}]...", parse_mode='Markdown')
                     await send_movie_file(update, context, f"{title} [{selected_quality}]", url, file_id)
                 else:
                     await query.edit_message_text("❌ File not found!")
             return
         
-        # Navigation
+        # Page navigation
         if query.data.startswith("page_"):
             page = int(query.data.replace("page_", ""))
             movies = context.user_data.get('search_results', [])
             if movies:
                 await query.edit_message_text(
-                    f"🔍 **Found {len(movies)} results**\n\nSelect one ⬇️",
+                    f"🔍 **Found {len(movies)} results**\n\n⬇️ Select one:",
                     reply_markup=create_movie_selection_keyboard(movies, page),
                     parse_mode='Markdown'
                 )
@@ -1010,22 +1182,19 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {context.error}", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Something went wrong. Please try again.")
+            msg = await update.effective_message.reply_text("❌ Something went wrong. Please try again.")
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, msg.message_id, MESSAGE_DELETE_TIME))
         except:
             pass
-
-# ==================== KEEP YOUR EXISTING FUNCTIONS ====================
-# [Keep all your existing admin commands and other functions here]
-# setup_database(), update_movies_in_db(), store_user_request(), etc.
 
 # ==================== MAIN BOT ====================
 def main():
     """Run the Telegram bot"""
-    logger.info("Starting FilmfyBox Bot...")
+    logger.info("Starting Ur Movie Bot...")
     
-    # Keep your existing setup_database()
+    # Setup database (use your existing function)
     try:
-        from setup_database import setup_database  # Use your existing setup
+        from setup_database import setup_database
         setup_database()
     except:
         pass
@@ -1049,7 +1218,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, group_message_handler))
     application.add_handler(conv_handler)
     
-    # Keep all your existing admin command handlers
+    # Add your existing admin command handlers here
     # application.add_handler(CommandHandler("addmovie", add_movie))
     # etc...
     
@@ -1060,7 +1229,7 @@ def main():
     # flask_thread.daemon = True
     # flask_thread.start()
     
-    logger.info("Bot started successfully! 🎬")
+    logger.info("Bot started successfully! 🎬⚡")
     application.run_polling()
 
 if __name__ == '__main__':
