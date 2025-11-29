@@ -1,5 +1,3 @@
-handlers/group.py
-
 from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from utils.parser import normalize
