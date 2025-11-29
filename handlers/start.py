@@ -22,6 +22,6 @@ async def start(update:Update, context:ContextTypes.DEFAULT_TYPE):
             await send_file(context,chat_id, movie_id, m['title'], m['url'], m['file_id'])
         return
 
-    txt=f"👋 Hey {user.first_name}!  \n\nI'm **Netflix-Style Movie Bot**. Type any movie/series name."
+    txt=f"👋 Hey {user.first_name}!  \n\nI'm <b>Ur Movie Bot</b>. Type any movie/series name."
     msg=await update.message.reply_html(txt, reply_markup=start_kb())
     asyncio.create_task(auto_delete(context,chat_id,msg.message_id,60))
