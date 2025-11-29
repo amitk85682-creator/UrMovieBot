@@ -1,5 +1,3 @@
-templates/keyboards.py
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import CHANNEL_LINK, GROUP_LINK, BOT_USERNAME
 
