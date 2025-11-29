@@ -1,11 +1,3 @@
-# Add this snippet near the top of main.py, after your imports:
-try:
-    # prefer db_utils' fixed URL if it exists
-    import db_utils
-    FIXED_DATABASE_URL = getattr(db_utils, "FIXED_DATABASE_URL", None)
-except Exception:
-    FIXED_DATABASE_URL = None
-
 # -*- coding: utf-8 -*-
 import os
 import threading
@@ -28,6 +20,14 @@ from telegram.ext import (
 from datetime import datetime, timedelta
 from fuzzywuzzy import process, fuzz
 from urllib.parse import urlparse
+
+# ==================== OPTIONAL FIXED DB URL (db_utils) ====================
+try:
+    # prefer db_utils' fixed URL if it exists
+    import db_utils
+    FIXED_DATABASE_URL = getattr(db_utils, "FIXED_DATABASE_URL", None)
+except Exception:
+    FIXED_DATABASE_URL = None
 
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
@@ -62,14 +62,16 @@ if not TELEGRAM_BOT_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN environment variable is not set")
     raise ValueError("TELEGRAM_BOT_TOKEN is not set.")
 
-if not DATABASE_URL:
-    logger.error("DATABASE_URL environment variable is not set")
-    raise ValueError("DATABASE_URL is not set.")
+if not (DATABASE_URL or FIXED_DATABASE_URL):
+    logger.error("No DATABASE_URL or FIXED_DATABASE_URL is configured")
+    raise ValueError("DATABASE_URL / FIXED_DATABASE_URL is not set.")
 
 # ==================== UTILITY FUNCTIONS ====================
-def preprocess_query(query):
+def preprocess_query(query: str) -> str:
     """Clean and normalize user query"""
-    query = re.sub(r'[^\w\s-]', '', query)
+    if not query:
+        return ""
+    query = re.sub(r'[^\w\s-]', ' ', query)
     query = ' '.join(query.split())
     stop_words = ['movie', 'film', 'full', 'download', 'watch', 'online', 'free', 'फिल्म', 'मूवी', 'सीरीज']
     words = query.lower().split()
@@ -77,14 +79,29 @@ def preprocess_query(query):
     return ' '.join(words).strip()
 
 def _normalize_title_for_match(title: str) -> str:
-    """Normalize title for fuzzy matching"""
+    """Normalize title for fuzzy / substring matching"""
     if not title:
         return ""
-    t = re.sub(r'[^\w\s]', ' ', title)
+    t = title.lower()
+    t = re.sub(r'[^\w\s]', ' ', t)   # remove punctuation
     t = re.sub(r'\s+', ' ', t).strip()
-    return t.lower()
+    return t
 
-async def delete_message_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = AUTO_DELETE_DELAY):
+def _normalize_base_name(name: str) -> str:
+    """Normalize base name so that 'Stranger Things', 'stranger.things' etc match."""
+    if not name:
+        return ""
+    n = name.lower()
+    n = re.sub(r'[^\w\s]', ' ', n)   # remove punctuation
+    n = re.sub(r'\s+', ' ', n).strip()
+    return n
+
+async def delete_message_after_delay(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    delay: int = AUTO_DELETE_DELAY
+):
     """Auto delete message after specified delay"""
     try:
         await asyncio.sleep(delay)
@@ -95,42 +112,131 @@ async def delete_message_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id
 
 # ==================== NEW HELPER FUNCTIONS ====================
 
-def parse_info(title):
+def parse_info(title: str) -> dict:
     """
-    Analyzes a title to extract: Base Name, Season, Episode, Quality
-    Returns: dict with details
+    Analyze a raw file title and extract:
+    - base_name  (for grouping / Netflix-like catalog)
+    - season
+    - episode
+    - quality
+    - language
     """
+    if not title:
+        return {
+            "base_name": "",
+            "season": None,
+            "episode": None,
+            "quality": "HD",
+            "language": "Unknown",
+            "original_title": title
+        }
+
+    original_title = title
     title_lower = title.lower()
-    
-    # 1. Base Name Clean (Remove S01, E01, 720p etc)
-    base_pattern = r"(?i)(?:\s(season|s\d+|vol|volume|part|ep|episode|ch|chapter|\d{3,4}p|4k|hd|hindi|dual|dubbed).*)"
-    base_name = re.split(base_pattern, title_lower)[0].replace(".", " ").replace("-", " ").strip()
-    
-    # 2. Extract Season
-    # Matches: S01, Season 1, S1
-    season_match = re.search(r'(?:s|season)\s?(\d{1,2})', title_lower)
-    season = int(season_match.group(1)) if season_match else None
 
-    # 3. Extract Episode
-    # Matches: E01, Episode 1, Ep 1
-    episode_match = re.search(r'(?:e|ep|episode)\s?(\d{1,3})', title_lower)
-    episode = int(episode_match.group(1)) if episode_match else None
+    # 1) Normalized string for base-name & S/E detection
+    #    Replace separators (., -, _, etc) with space so "Stranger.Things.S01E01" works.
+    norm = re.sub(r'[.\-_]', ' ', title_lower)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    tokens = norm.split()
 
-    # 4. Extract Quality (Simple check)
+    # Keywords & patterns
+    quality_re = re.compile(r'^(?:\d{3,4}p|4k|2160p)$')
+    season_token_re = re.compile(r'^s\d{1,2}$')
+    episode_token_re = re.compile(r'^e\d{1,3}$')
+    year_re = re.compile(r'^(19|20)\d{2}$')
+
+    tech_words = {
+        'season', 'seasons', 's', 'ep', 'eps', 'episode', 'episodes',
+        'vol', 'volume', 'part', 'chapter', 'ch',
+        'hdrip', 'webrip', 'webdl', 'web-dl', 'bluray', 'brrip',
+        'dvdrip', 'cam', 'hdtc', 'hdcam',
+        'proper', 'repack', 'uncut', 'complete', 'collection', 'pack'
+    }
+    lang_words = {
+        'hindi', 'hin', 'urdu', 'tamil', 'telugu', 'malayalam', 'kannada',
+        'english', 'eng',
+        'dual', 'multi', 'dubbed', 'dub', 'subbed', 'sub'
+    }
+
+    # 1.a) Build base name tokens (stop when quality / season / tech info starts)
+    base_tokens = []
+    for i, tok in enumerate(tokens):
+        is_technical = False
+
+        if quality_re.match(tok):
+            is_technical = True
+        elif season_token_re.match(tok) or episode_token_re.match(tok):
+            is_technical = True
+        elif tok in tech_words or tok in lang_words:
+            is_technical = True
+        elif tok in {'s', 'season'} and i + 1 < len(tokens) and tokens[i + 1].isdigit():
+            is_technical = True
+        elif tok in {'ep', 'episode'} and i + 1 < len(tokens) and tokens[i + 1].isdigit():
+            is_technical = True
+        # plain year → keep (not treated as technical)
+        elif year_re.match(tok):
+            is_technical = False
+
+        if is_technical:
+            break
+        base_tokens.append(tok)
+
+    base_name = ' '.join(base_tokens).strip()
+    if not base_name:
+        base_name = norm
+
+    # 2) Extract Season & Episode from normalized string
+    season = None
+    episode = None
+
+    # Season: S01, S1, Season 1
+    season_match = re.search(r'(?:\bseason\b|\bs)(?:\s*|\.|\-)?(\d{1,2})', norm)
+    if season_match:
+        try:
+            season = int(season_match.group(1))
+        except ValueError:
+            season = None
+
+    # Episode: E01, E1, Ep 1, Episode 1
+    ep_match = re.search(r'(?:\bepisode\b|\bep\b|\be)(?:\s*|\.|\-)?(\d{1,3})', norm)
+    if ep_match:
+        try:
+            episode = int(ep_match.group(1))
+        except ValueError:
+            episode = None
+
+    # 3) Quality detection (priority: highest → lowest)
     quality = "HD"
-    if "480p" in title_lower: quality = "480p"
-    elif "720p" in title_lower: quality = "720p"
-    elif "1080p" in title_lower: quality = "1080p"
-    elif "4k" in title_lower: quality = "4K"
-    elif "2160p" in title_lower: quality = "4K"
-    elif "cam" in title_lower: quality = "CAM"
+    if re.search(r'2160p|4k', title_lower):
+        quality = "4K"
+    elif "1080p" in title_lower:
+        quality = "1080p"
+    elif "720p" in title_lower:
+        quality = "720p"
+    elif "480p" in title_lower:
+        quality = "480p"
+    elif "cam" in title_lower or "hdcam" in title_lower or "hdtc" in title_lower:
+        quality = "CAM"
+
+    # 4) Language detection
+    language = "Unknown"
+    if "multi audio" in title_lower or "multi-audio" in title_lower or "multi" in title_lower:
+        language = "Multi-Audio"
+    elif "dual audio" in title_lower or "dual" in title_lower:
+        language = "Dual Audio"
+    elif "hindi" in title_lower or "hin " in title_lower or title_lower.endswith(" hin"):
+        language = "Hindi"
+    elif "english" in title_lower or " eng" in title_lower:
+        language = "English"
 
     return {
         "base_name": base_name,
         "season": season,
         "episode": episode,
         "quality": quality,
-        "original_title": title
+        "language": language,
+        "original_title": original_title
     }
 
 # ==================== DATABASE FUNCTIONS ====================
@@ -155,7 +261,12 @@ def setup_database():
         ''')
 
         # Create sync info table
-        cur.execute('CREATE TABLE IF NOT EXISTS sync_info (id SERIAL PRIMARY KEY, last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP);')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS sync_info (
+                id SERIAL PRIMARY KEY,
+                last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
 
         # Indexes
         cur.execute('CREATE INDEX IF NOT EXISTS idx_movies_title ON movies (title);')
@@ -233,7 +344,7 @@ def update_movies_in_db():
                     published_time = datetime.strptime(item['published'], '%Y-%m-%dT%H:%M:%S.%fZ')
                     if published_time < last_sync_time:
                         continue
-                except:
+                except Exception:
                     pass
 
             if title and url and title.strip() not in existing_movies and title.strip() not in unique_titles:
@@ -259,11 +370,13 @@ def update_movies_in_db():
         return f"An error occurred during update: {e}"
 
     finally:
-        if cur: cur.close()
-        if conn: conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
-def get_movie_from_db(user_query):
-    """Search for exact/fuzzy match movie in database"""
+def get_movie_from_db(user_query: str):
+    """Search a single best match movie in database (anchor), then we expand to all seasons/qualities."""
     conn = None
     try:
         conn = get_db_connection()
@@ -272,39 +385,43 @@ def get_movie_from_db(user_query):
 
         cur = conn.cursor()
         processed_query = preprocess_query(user_query)
-        logger.info(f"Searching for: '{processed_query}'")
-
-        # Exact match first
-        cur.execute(
-            "SELECT id, title, url, file_id FROM movies WHERE LOWER(title) LIKE LOWER(%s) LIMIT 1",
-            (f'%{processed_query}%',)
-        )
-        exact_match = cur.fetchone()
-
-        if exact_match:
+        if not processed_query:
             cur.close()
             conn.close()
-            return exact_match
+            return None
 
-        # Fuzzy match with high threshold
+        logger.info(f"Searching for: '{processed_query}'")
+
+        # Fetch all titles once
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
-
         if not all_movies:
             cur.close()
             conn.close()
             return None
 
-        movie_titles = [movie[1] for movie in all_movies]
-        movie_dict = {movie[1]: movie for movie in all_movies}
+        norm_query = _normalize_title_for_match(processed_query)
 
-        matches = process.extract(processed_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=1)
-        if matches and len(matches) > 0:
-            title, score = matches[0][0], matches[0][1]
-            if score >= SIMILARITY_THRESHOLD and title in movie_dict:
+        # 1) Try simple normalized substring match (handles dots, hyphens etc.)
+        for movie in all_movies:
+            mid, mtitle, murl, mfid = movie
+            norm_title = _normalize_title_for_match(mtitle)
+            if norm_query and norm_query in norm_title:
                 cur.close()
                 conn.close()
-                return movie_dict[title]
+                return movie
+
+        # 2) Fuzzy match as fallback
+        movie_titles = [m[1] for m in all_movies]
+        movie_dict = {m[1]: m for m in all_movies}
+
+        matches = process.extract(processed_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=1)
+        if matches:
+            best_title, score = matches[0]
+            if score >= SIMILARITY_THRESHOLD and best_title in movie_dict:
+                cur.close()
+                conn.close()
+                return movie_dict[best_title]
 
         cur.close()
         conn.close()
@@ -317,39 +434,60 @@ def get_movie_from_db(user_query):
         if conn:
             try:
                 conn.close()
-            except:
+            except Exception:
                 pass
 
-def get_similar_movies(base_title):
-    """Finds all movies/seasons matching the base title by stripping Season/Quality info."""
+def get_similar_movies(base_title: str):
+    """
+    Find all DB entries that belong to the same 'base title':
+    e.g. all seasons/episodes/qualities of "Stranger Things"
+    or all qualities of "Tere Ishk Mein (2024)".
+    """
     try:
         conn = get_db_connection()
-        if not conn: return []
+        if not conn:
+            return []
+
         cur = conn.cursor()
-        
-        # 1. लोअर केस में कन्वर्ट करें
-        clean_name = base_title.lower()
+        cur.execute("SELECT id, title, url, file_id FROM movies")
+        rows = cur.fetchall()
 
-        # 2. REGEX: Season, Episode, Volume, Part और Quality को हटाने के लिए
-        # यह पैटर्न " S01", " Season", " Vol", " 720p", " 2024" आदि के बाद सब कुछ हटा देगा
-        # ताकि हमें सिर्फ "stranger things" मिले
-        pattern = r"(?i)(?:\s(season|s\d+|vol|volume|part|ep|episode|ch|chapter|\d{3,4}p|4k|hd|hindi|dual|dubbed).*)"
-        
-        # नाम को split करें और पहला हिस्सा (Base Name) लें
-        clean_name = re.split(pattern, clean_name)[0]
-        
-        # एक्स्ट्रा स्पेस और स्पेशल कैरेक्टर हटाएं
-        clean_name = clean_name.replace(":", "").replace("-", "").strip()
+        base_norm = _normalize_base_name(base_title)
+        if not base_norm:
+            return []
 
-        logger.info(f"🔍 Base Search Name: '{clean_name}' (Original: {base_title})")
-        
-        # 3. सर्च क्वेरी: अब यह 'stranger things' ढूंढेगा, जिससे S1 से S5 सब आ जाएंगे
-        query = "SELECT id, title, url, file_id FROM movies WHERE title ILIKE %s ORDER BY title"
-        cur.execute(query, (f"%{clean_name}%",))
-        results = cur.fetchall()
-        
-        logger.info(f"✅ Found {len(results)} matches for '{clean_name}'")
-        
+        candidates = []
+        for row in rows:
+            mid, title, url, fid = row
+            info = parse_info(title)
+            if _normalize_base_name(info['base_name']) == base_norm:
+                candidates.append((row, info))
+
+        # Sort nicely: Season → Episode → Quality → Title
+        def quality_rank(q: str) -> int:
+            mapping = {
+                "CAM": 0,
+                "480p": 1,
+                "720p": 2,
+                "HD": 2,
+                "1080p": 3,
+                "4K": 4
+            }
+            return mapping.get(q or "HD", 5)
+
+        sorted_items = sorted(
+            candidates,
+            key=lambda item: (
+                item[1]['season'] or 0,
+                item[1]['episode'] or 0,
+                quality_rank(item[1]['quality']),
+                item[0][1]  # title
+            )
+        )
+
+        results = [row for row, info in sorted_items]
+
+        logger.info(f"Found {len(results)} matches for base '{base_norm}'")
         cur.close()
         conn.close()
         return results
@@ -357,12 +495,16 @@ def get_similar_movies(base_title):
     except Exception as e:
         logger.error(f"Error getting similar movies: {e}")
         return []
+
 # ==================== KEYBOARD MARKUPS ====================
 def get_start_keyboard():
     """Start menu keyboard exactly as per your image"""
     keyboard = [
         [
-            InlineKeyboardButton("➕ Add Me To Your Groups ➕", url=f"https://t.me/{(os.environ.get('BOT_USERNAME') or 'urmoviebot')}?startgroup=true")
+            InlineKeyboardButton(
+                "➕ Add Me To Your Groups ➕",
+                url=f"https://t.me/{(os.environ.get('BOT_USERNAME') or 'urmoviebot')}?startgroup=true"
+            )
         ],
         [
             InlineKeyboardButton("📢 CHANNEL", url=CHANNEL_LINK),
@@ -405,173 +547,241 @@ def get_file_options_keyboard():
         ],
         [
             InlineKeyboardButton("💬 ᴊᴏɪɴ ɢʀᴏᴜᴘ", url=GROUP_LINK),
-            InlineKeyboardButton("♻️ sʜᴀʀᴇ ʙᴏᴛ", url=f"https://t.me/share/url?url=https://t.me/{os.environ.get('BOT_USERNAME', 'urmoviebot')}")
+            InlineKeyboardButton(
+                "♻️ sʜᴀʀᴇ ʙᴏᴛ",
+                url=f"https://t.me/share/url?url=https://t.me/{os.environ.get('BOT_USERNAME', 'urmoviebot')}"
+            )
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 # ==================== MOVIE DELIVERY FUNCTIONS ====================
-async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, movie_data: tuple, mode="auto"):
+async def send_movie_to_user(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    movie_data: tuple,
+    mode: str = "auto"
+):
     """
     Smart Delivery System:
-    mode="auto"   -> First Search (Decides if Series or Movie)
-    mode="season" -> Shows Episodes for a Season
-    mode="final"  -> Sends the actual file with Premium Animation
+
+    mode="auto"   -> Decide Series vs Movie, show Seasons / Episodes / Qualities
+    mode="final"  -> Send the actual file with premium feeling
     """
     try:
         movie_id, title, url, file_id = movie_data
         chat_id = user_id
-        
-        # Parse info from the requested movie
+
         info = parse_info(title)
-        base_name = info['base_name']
+        base_name = info['base_name'] or title
+        base_display = base_name.title()
 
-        # --- MODE: AUTO (First Search) ---
+        # AUTO MODE: detect if Series or Movie and show menu
         if mode == "auto":
-            # Database से इस नाम की सारी फाइल्स लाओ
             all_files = get_similar_movies(base_name)
-            
-            # Check 1: क्या यह Series है?
-            is_series = any(parse_info(m[1])['season'] is not None for m in all_files)
+            # Fallback: if somehow we got nothing, at least send this one
+            if not all_files:
+                await send_movie_to_user(context, user_id, movie_data, mode="final")
+                return
 
-            if is_series:
-                # --- SERIES LOGIC ---
-                seasons_found = set()
-                for m in all_files:
-                    s = parse_info(m[1])['season']
-                    if s: seasons_found.add(s)
-                
-                sorted_seasons = sorted(list(seasons_found))
-                
+            parsed_all = {m[0]: parse_info(m[1]) for m in all_files}
+            has_season = any(pi['season'] is not None for pi in parsed_all.values())
+            has_episode = any(pi['episode'] is not None for pi in parsed_all.values())
+
+            # ========== SERIES FLOW ==========
+            if has_season and has_episode:
+                seasons_found = {
+                    pi['season'] for pi in parsed_all.values() if pi['season'] is not None
+                }
+                sorted_seasons = sorted(seasons_found)
+
                 if sorted_seasons:
                     keyboard = []
                     row = []
                     for s in sorted_seasons:
-                        btn_text = f"💿 Season {s}"
+                        btn_text = f"📺 Season {s}"
                         row.append(InlineKeyboardButton(btn_text, callback_data=f"v_seas_{s}_{movie_id}"))
                         if len(row) == 3:
                             keyboard.append(row)
                             row = []
-                    if row: keyboard.append(row)
-                    
+                    if row:
+                        keyboard.append(row)
+
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"🎬 <b>{base_name.title()}</b>\n\n📌 <b>Select a Season:</b>",
+                        text=(
+                            f"🍿 <b>{base_display}</b>\n"
+                            f"📺 TV Series\n\n"
+                            f"📌 <b>Select a Season to continue:</b>"
+                        ),
                         reply_markup=InlineKeyboardMarkup(keyboard),
                         parse_mode='HTML'
                     )
-                    return 
+                    return
 
-            # --- MOVIE LOGIC ---
+            # ========== MOVIE FLOW ==========
             keyboard = []
             row = []
-            seen_qualities = set()
-            
-            # Top 15 results
-            for mov in all_files[:15]:
-                m_id, m_title, _, _ = mov
-                p_info = parse_info(m_title)
-                q_text = p_info['quality']
-                lang = "Hin" if "hindi" in m_title.lower() else "Eng"
-                
-                # Create unique button
-                btn_key = f"{q_text}_{lang}"
-                if btn_key not in seen_qualities:
-                    seen_qualities.add(btn_key)
-                    row.append(InlineKeyboardButton(f"📁 {q_text} {lang}", callback_data=f"quality_{m_id}"))
-                    if len(row) == 2:
-                        keyboard.append(row)
-                        row = []
-            if row: keyboard.append(row)
+            seen = set()
 
-            # Agar koi similar quality nahi mili, to direct file bhej do (Fail safe)
+            # हम यहाँ सारी qualities/lang को unique करके दिखा रहे हैं
+            for mov in all_files:
+                mid, m_title, _, _ = mov
+                p_info = parsed_all[mid]
+                q_text = p_info['quality'] or "HD"
+                lang = p_info['language'] or "Unknown"
+
+                # छोटा label
+                if lang == "Hindi":
+                    lang_label = "Hin"
+                elif lang == "English":
+                    lang_label = "Eng"
+                elif lang == "Dual Audio":
+                    lang_label = "Dual"
+                elif lang == "Multi-Audio":
+                    lang_label = "Multi"
+                else:
+                    lang_label = ""
+
+                key = (q_text, lang_label)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                btn_text = f"📁 {q_text}" + (f" {lang_label}" if lang_label else "")
+                row.append(InlineKeyboardButton(btn_text, callback_data=f"quality_{mid}"))
+
+                if len(row) == 2:
+                    keyboard.append(row)
+                    row = []
+            if row:
+                keyboard.append(row)
+
             if not keyboard:
-                 await send_movie_to_user(context, user_id, movie_data, mode="final")
-                 return
+                # कुछ गड़बड़ में direct file
+                await send_movie_to_user(context, user_id, movie_data, mode="final")
+                return
 
-            msg_text = f"🎬 <b>{base_name.title()}</b>\n\n✅ <b>Movie Found!</b>\n👇 <i>Select Quality:</i>"
-            await context.bot.send_message(chat_id=chat_id, text=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-            return
-
-        # --- MODE: FINAL (Send File) ---
-        if mode == "final":
-            # 1. Send Loading Message
-            loading_msg = await context.bot.send_message(
+            msg_text = (
+                f"🎬 <b>{base_display}</b>\n"
+                f"🎞️ <b>Movie Found!</b>\n\n"
+                f"👇 <i>Select the quality you want:</i>"
+            )
+            await context.bot.send_message(
                 chat_id=chat_id,
-                text="⏳ <b>Processing Request...</b>\n<i>Fetching file from database...</i>",
+                text=msg_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
-            await asyncio.sleep(0.5) # Fake processing time for premium feel
+            return
 
-            # 2. Premium Caption
+        # FINAL MODE: actually deliver file / link
+        if mode == "final":
+            # 1) Loading / processing message
+            loading_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "⏳ <b>Processing your request...</b>\n"
+                    "<i>Preparing your file, please wait.</i>"
+                ),
+                parse_mode='HTML'
+            )
+            await asyncio.sleep(0.5)
+
+            # 2) Premium caption
             caption_text = (
                 f"🎬 <b>{title}</b>\n"
                 f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
                 f"💿 <b>Quality:</b> <i>High Definition</i>\n"
-                f"🔊 <b>Language:</b> <i>Hindi / English</i>\n"
+                f"🔊 <b>Language:</b> <i>Available as uploaded</i>\n"
                 f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
                 f"🚀 <b>Join Our Channels:</b>\n"
-                f"📢 <a href='{CHANNEL_LINK}'>Main Channel</a> | 💬 <a href='{GROUP_LINK}'>Support Group</a>\n\n"
-                f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
+                f"📢 <a href='{CHANNEL_LINK}'>Main Channel</a> | "
+                f"💬 <a href='{GROUP_LINK}'>Support Group</a>\n\n"
+                f"⚠️ <i>Auto-delete in 60s. Forward explicitly if needed.</i>"
             )
 
             sent_msg = None
 
             try:
-                # A. Try sending by File ID
+                # A) Try sending by Telegram file_id
                 if file_id:
-                    await context.bot.edit_message_text(chat_id=chat_id, message_id=loading_msg.message_id, text="📤 <b>Uploading File...</b>", parse_mode='HTML')
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_msg.message_id,
+                        text="📤 <b>Uploading file to you...</b>",
+                        parse_mode='HTML'
+                    )
                     sent_msg = await context.bot.send_document(
-                        chat_id=chat_id, 
-                        document=file_id, 
-                        caption=caption_text, 
-                        parse_mode='HTML', 
+                        chat_id=chat_id,
+                        document=file_id,
+                        caption=caption_text,
+                        parse_mode='HTML',
                         reply_markup=get_file_options_keyboard()
                     )
 
-                # B. Try Copying from Private Channel (Link: https://t.me/c/xxxx/xxx)
+                # B) Try copying from private channel messages (t.me/c/xxx/yyy)
                 elif url and "t.me/c/" in url:
-                    await context.bot.edit_message_text(chat_id=chat_id, message_id=loading_msg.message_id, text="🔄 <b>Retrieving from Archive...</b>", parse_mode='HTML')
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_msg.message_id,
+                        text="🔄 <b>Retrieving from archive...</b>",
+                        parse_mode='HTML'
+                    )
                     parts = url.rstrip('/').split('/')
-                    # Extract Chat ID (-100xxxx) and Message ID
                     ch_id_str = parts[-2]
                     from_chat_id = int("-100" + ch_id_str) if not ch_id_str.startswith("-100") else int(ch_id_str)
                     message_id = int(parts[-1])
 
                     sent_msg = await context.bot.copy_message(
-                        chat_id=chat_id, 
-                        from_chat_id=from_chat_id, 
+                        chat_id=chat_id,
+                        from_chat_id=from_chat_id,
                         message_id=message_id,
-                        caption=caption_text, 
-                        parse_mode='HTML', 
+                        caption=caption_text,
+                        parse_mode='HTML',
                         reply_markup=get_file_options_keyboard()
                     )
 
-                # C. Public Link or Direct URL
+                # C) Fallback: direct/public link only
                 else:
                     sent_msg = await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"🎬 <b>{title}</b>\n\n🔗 <b>Download Link:</b> {url}\n\n{caption_text}",
-                        parse_mode='HTML', 
+                        text=(
+                            f"🎬 <b>{title}</b>\n\n"
+                            f"🔗 <b>Download Link:</b> {url}\n\n"
+                            f"{caption_text}"
+                        ),
+                        parse_mode='HTML',
                         reply_markup=get_file_options_keyboard()
                     )
 
             except Exception as e:
                 logger.error(f"Failed to send file: {e}")
-                await context.bot.send_message(chat_id=chat_id, text="❌ <b>Error:</b> File removed or inaccessible.", parse_mode='HTML')
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ <b>Error:</b> File removed or inaccessible.",
+                    parse_mode='HTML'
+                )
 
-            # Cleanup
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
-            
+            # Remove loading message
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
+            except Exception:
+                pass
+
+            # Auto-delete timer for delivered file
             if sent_msg:
-                # Timer Message
-                timer_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ <i>This message will self-destruct in 60 seconds.</i>", parse_mode='HTML')
-                # Auto Delete Task
+                timer_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ <i>This message will self-destruct in 60 seconds.</i>",
+                    parse_mode='HTML'
+                )
                 asyncio.create_task(delete_message_after_delay(context, chat_id, sent_msg.message_id, 60))
                 asyncio.create_task(delete_message_after_delay(context, chat_id, timer_msg.message_id, 60))
 
     except Exception as e:
         logger.error(f"Send Movie Error: {e}")
+
 # ==================== TELEGRAM BOT HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - with deep link support for movie delivery"""
@@ -591,7 +801,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.close()
 
                 if movie_data:
-                    await send_movie_to_user(context, chat_id, movie_data)
+                    await send_movie_to_user(context, chat_id, movie_data, mode="auto")
                 else:
                     msg = await update.message.reply_text("❌ मूवी डेटाबेस में नहीं मिली।")
                     asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
@@ -616,8 +826,7 @@ THATS ALL, I WILL PROVIDE MOVIES THERE.... 😊
 
 © MAINTAINED BY: FlimfyBox Team 🚀
     """
-    
-    # Send start image with caption and buttons
+
     try:
         msg = await update.message.reply_photo(
             photo=START_IMAGE_URL,
@@ -628,7 +837,6 @@ THATS ALL, I WILL PROVIDE MOVIES THERE.... 😊
         asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
     except Exception as e:
         logger.error(f"Error sending start message: {e}")
-        # Fallback text message
         msg = await update.message.reply_text(
             start_caption,
             parse_mode='Markdown',
@@ -649,22 +857,18 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if len(message_text) < 4 or message_text.startswith('/'):
         return
 
-    # Search for movie
     movie_data = get_movie_from_db(message_text)
     if not movie_data:
-        # No data? Do NOT reply anything - just read
         return
 
-    # If movie found: Send "📂 Get File Here" button
     movie_id, title, _, _ = movie_data
     reply_text = f"@{user.username}, 🎬 **{title}** के लिए नीचे का बटन क्लिक करें:"
-    
+
     msg = await update.message.reply_text(
         reply_text,
         parse_mode='Markdown',
         reply_markup=get_group_movie_button(movie_id)
     )
-    # Auto delete this reply after delay
     asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -675,22 +879,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
 
     try:
-        # --- 1. FINAL FILE DELIVERY ---
+        # --- 1. FINAL FILE DELIVERY FROM QUALITY BUTTON ---
         if data.startswith("quality_"):
             movie_id = int(data.split("_")[1])
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (movie_id,))
             movie_data = cur.fetchone()
+            cur.close()
             conn.close()
-            
+
             if movie_data:
-                # Delete selection menu
                 try:
                     await query.message.delete()
-                except:
+                except Exception:
                     pass
-                # Send File (Mode: Final)
                 await send_movie_to_user(context, query.from_user.id, movie_data, mode="final")
             else:
                 await query.message.edit_text("❌ File not found.")
@@ -701,24 +904,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = data.split("_")
             season_num = int(parts[2])
             anchor_id = int(parts[3])
-            
+
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
             res = cur.fetchone()
+            cur.close()
             conn.close()
-            
+
             if not res:
                 await query.message.edit_text("❌ Series not found.")
                 return
-                
+
             base_title = parse_info(res[0])['base_name']
-            
-            # Get ALL files again
             all_files = get_similar_movies(base_title)
-            
-            # Filter for selected Season
-            episodes_map = {} 
+
+            # Group by episode number
+            episodes_map = {}
             for mov in all_files:
                 p_info = parse_info(mov[1])
                 if p_info['season'] == season_num and p_info['episode'] is not None:
@@ -726,24 +928,33 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep_num not in episodes_map:
                         episodes_map[ep_num] = []
                     episodes_map[ep_num].append(mov)
-            
+
             sorted_eps = sorted(episodes_map.keys())
+            if not sorted_eps:
+                await query.message.edit_text("❌ इस Season के लिए कोई Episode नहीं मिला.")
+                return
+
             keyboard = []
             row = []
-            
             for ep in sorted_eps:
                 btn_txt = f"Ep {ep}"
-                # Callback: v_ep_{season}_{ep}_{anchor_id}
                 row.append(InlineKeyboardButton(btn_txt, callback_data=f"v_ep_{season_num}_{ep}_{anchor_id}"))
-                if len(row) == 4: 
+                if len(row) == 4:
                     keyboard.append(row)
                     row = []
-            if row: keyboard.append(row)
-            
-            keyboard.append([InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"back_seas_{anchor_id}")])
+            if row:
+                keyboard.append(row)
+
+            keyboard.append([
+                InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"back_seas_{anchor_id}")
+            ])
 
             await query.message.edit_text(
-                text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>Season {season_num}</b>\n👇 <i>Select Episode:</i>",
+                text=(
+                    f"🍿 <b>{base_title.title()}</b>\n"
+                    f"📌 <b>Season {season_num}</b>\n\n"
+                    f"👇 <i>Select Episode:</i>"
+                ),
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
@@ -755,62 +966,105 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             season_num = int(parts[2])
             ep_num = int(parts[3])
             anchor_id = int(parts[4])
-            
+
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
             res = cur.fetchone()
+            cur.close()
             conn.close()
+
+            if not res:
+                await query.message.edit_text("❌ Series not found.")
+                return
+
             base_title = parse_info(res[0])['base_name']
-            
             all_files = get_similar_movies(base_title)
+
+            # Filter for selected Season & Episode
             target_files = []
             for mov in all_files:
                 p = parse_info(mov[1])
                 if p['season'] == season_num and p['episode'] == ep_num:
-                    target_files.append(mov)
-            
+                    target_files.append((mov, p))
+
+            if not target_files:
+                await query.message.edit_text("❌ इस Episode के लिए कोई File नहीं मिली.")
+                return
+
+            # Unique qualities + language
             keyboard = []
-            for mov in target_files:
+            seen = set()
+            for mov, p in target_files:
                 mid, mtitle, _, _ = mov
-                p = parse_info(mtitle)
-                btn_txt = f"📁 {p['quality']}"
+                q = p['quality'] or "HD"
+                lang = p['language'] or "Unknown"
+
+                if lang == "Hindi":
+                    lang_label = "Hin"
+                elif lang == "English":
+                    lang_label = "Eng"
+                elif lang == "Dual Audio":
+                    lang_label = "Dual"
+                elif lang == "Multi-Audio":
+                    lang_label = "Multi"
+                else:
+                    lang_label = ""
+
+                key = (q, lang_label)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                btn_txt = f"📁 {q}" + (f" {lang_label}" if lang_label else "")
                 keyboard.append([InlineKeyboardButton(btn_txt, callback_data=f"quality_{mid}")])
-                
-            keyboard.append([InlineKeyboardButton("🔙 Back to Episodes", callback_data=f"v_seas_{season_num}_{anchor_id}")])
-            
+
+            keyboard.append([
+                InlineKeyboardButton("🔙 Back to Episodes", callback_data=f"v_seas_{season_num}_{anchor_id}")
+            ])
+
             await query.message.edit_text(
-                text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>S{season_num} E{ep_num}</b>\n👇 <i>Select Quality:</i>",
+                text=(
+                    f"🍿 <b>{base_title.title()}</b>\n"
+                    f"📌 <b>S{season_num:02d} · E{ep_num:02d}</b>\n\n"
+                    f"👇 <i>Select Quality:</i>"
+                ),
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
 
-        # --- 4. BACK BUTTON ---
+        # --- 4. BACK BUTTON: Seasons menu ---
         elif data.startswith("back_seas_"):
             anchor_id = int(data.split("_")[2])
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (anchor_id,))
             movie_data = cur.fetchone()
+            cur.close()
             conn.close()
-            
+
             if movie_data:
                 await send_movie_to_user(context, query.from_user.id, movie_data, mode="auto")
-                await query.message.delete()
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
 
         # --- HELP ---
         elif data == "help":
             help_text = """
 ❓ **Help - कैसे उपयोग करें?**
 
-1. ग्रुप में बस मूवी का नाम टाइप करें
-2. बॉट आपको "📂 Get File Here" बटन देगा
-3. बटन पर क्लिक करें - आप बॉट के प्राइवेट चैट में जाएंगे
-4. वहां आपको मूवी/सीरीज का विकल्प मिलेगा
+1. ग्रुप में बस मूवी या सीरीज का नाम टाइप करें  
+2. बॉट आपको "📂 Get File Here" बटन देगा  
+3. बटन पर क्लिक करें - आप बॉट के प्राइवेट चैट में जाएंगे  
+4. वहाँ Netflix जैसा मेनू मिलेगा:
+   - Series: Season → Episode → Quality
+   - Movie: Direct Quality select
 
 ⚠️ नोट:
-- मूवी का नाम सही लिखें
-- सभी संदेश 1 मिनट के बाद ऑटो डिलीट हो जाते हैं
+- नाम जितना साफ़ होगा, रिज़ल्ट उतना बेहतर मिलेगा  
+- सभी फाइनल messages 1 मिनट बाद ऑटो डिलीट हो जाते हैं
             """
             msg = await query.edit_message_caption(
                 caption=help_text,
@@ -824,12 +1078,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             about_text = f"""
 ℹ️ **About {BOT_NAME}**
 
-यह बॉट आपको ग्रुप में बस मूवी का नाम टाइप करने पर मूवी की फ़ाइल प्रदान करता है।
+यह बॉट ग्रुप में सिर्फ नाम टाइप करने पर Netflix जैसा experience देता है:
 
-✅ फीचर्स:
-- स्मार्ट सीरीज/सीजन डिटेक्शन
-- ग्रुप से प्राइवेट चैट में फ़ाइल भेजना
-- सभी संदेश ऑटो डिलीट
+- सीरीज: Season → Episode → Quality wise files  
+- मूवी: Multiple qualities की clean list  
+- Files प्राइवेट चैट में मिलती हैं, auto-delete के साथ
 
 📢 चैनल: {CHANNEL_LINK}
 👥 ग्रुप: {GROUP_LINK}
@@ -854,7 +1107,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in button callback: {e}")
         try:
             await query.edit_message_text("❌ कुछ गलत हुआ। फिर से कोशिश करें।")
-        except:
+        except Exception:
             pass
 
 # ==================== ERROR HANDLER ====================
@@ -863,7 +1116,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
 
 # ==================== FLASK APP ====================
-flask_app = Flask('')
+flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
@@ -892,45 +1145,43 @@ def main():
     except Exception as e:
         logger.error(f"Database setup failed but continuing: {e}")
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).build()
+    application = Application.builder()\
+        .token(TELEGRAM_BOT_TOKEN)\
+        .read_timeout(30)\
+        .write_timeout(30)\
+        .build()
 
     # Register handlers
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CommandHandler('start', start))
-    
-    # Group message handler - priority over other handlers
+
+    # Group message handler
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
         group_message_handler
     ))
 
-    # ==================== NEW PRIVATE CHAT HANDLER ====================
+    # Private chat handler
     async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Search movies when user sends text in private chat"""
-        # अगर मैसेज खाली है तो कुछ मत करो
         if not update.message or not update.message.text:
             return
-            
+
         text = update.message.text
-        
-        # डेटाबेस में ढूंढो
         movie = get_movie_from_db(text)
-        
+
         if movie:
-            # Found? Start the delivery process (Auto Mode -> Series Check -> Quality Check)
             await send_movie_to_user(context, update.effective_chat.id, movie, mode="auto")
         else:
-            # Not found? (Optional: You can send a 'Not found' msg here if you want)
+            # Silent: no spam if not found
             pass
 
-    # Add the handler for Private Chats
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         private_message_handler
     ))
-    # =================================================================
 
-    # Register Error Handler
+    # Error handler
     application.add_error_handler(error_handler)
 
     # Start Flask in background thread
