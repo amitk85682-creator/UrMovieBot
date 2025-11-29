@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import os
 import threading
 import asyncio
@@ -9,12 +10,14 @@ import requests
 import signal
 import sys
 import re
+
 from bs4 import BeautifulSoup
 import telegram
 import psycopg2
 from typing import Optional
 from flask import Flask, request, session, g
 import google.generativeai as genai
+
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import (
     Application,
@@ -30,28 +33,19 @@ from fuzzywuzzy import process, fuzz
 from urllib.parse import urlparse, urlunparse, quote
 from collections import defaultdict
 
+# ==================== FLASK APP (for Render/Web hosting) ====================
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "FilmfyBox bot is running ✅"
+
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# ==================== FLASK APP FOR PORT BINDING ====================
-app = Flask(__name__)
-PORT = int(os.environ.get('PORT', 5000))
-
-@app.route('/')
-def home():
-    return "FilmfyBox Premium Bot is Running! 🎬"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-def run_flask():
-    """Run Flask server for port binding"""
-    app.run(host='0.0.0.0', port=PORT, debug=False)
 
 # ==================== CONVERSATION STATES ====================
 MAIN_MENU, SEARCHING, REQUESTING = range(3)
@@ -81,10 +75,6 @@ MAX_REQUESTS_PER_MINUTE = int(os.environ.get('MAX_REQUESTS_PER_MINUTE', '10'))
 
 # Auto delete delay (seconds) for normal bot messages
 AUTO_DELETE_DELAY = int(os.environ.get('AUTO_DELETE_DELAY', '300'))  # default 5 minutes
-AUTO_DELETE_FILE_DELAY = 60  # 60 seconds for files
-
-# Store message IDs for deletion
-message_deletion_tasks = {}
 
 # Validate required environment variables
 if not TELEGRAM_BOT_TOKEN:
@@ -172,47 +162,18 @@ def parse_series_info(title):
         if match:
             info['season'] = int(match.group(1))
             info['episode'] = int(match.group(2))
-            info['base_title'] = re.sub(r'Season\s*\d+.*Episode\s*\d+', '', title, flags=re.IGNORECASE).strip()
+            info['base_title'] = re.sub(
+                r'Season\s*\d+.*Episode\s*\d+',
+                '',
+                title,
+                flags=re.IGNORECASE
+            ).strip()
             info['is_series'] = True
             
         return info
     except Exception as e:
         logger.error(f"Error in parse_series_info: {e}")
         return {'base_title': title, 'season': None, 'episode': None, 'is_series': False}
-
-# ==================== AUTO DELETE SYSTEM ====================
-async def auto_delete_message(context, chat_id, message_id, delay):
-    """Delete a message after delay"""
-    try:
-        await asyncio.sleep(delay)
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            logger.info(f"Deleted message {message_id} in chat {chat_id}")
-        except Exception as e:
-            logger.debug(f"Could not delete message {message_id}: {e}")
-    except Exception as e:
-        logger.error(f"Error in auto_delete_message: {e}")
-
-def schedule_message_deletion(context, chat_id, message_id, delay=None):
-    """Schedule a message for deletion"""
-    try:
-        if delay is None:
-            delay = AUTO_DELETE_DELAY
-        
-        # Create unique task key
-        task_key = f"{chat_id}_{message_id}"
-        
-        # Cancel existing task if any
-        if task_key in message_deletion_tasks:
-            message_deletion_tasks[task_key].cancel()
-        
-        # Create new deletion task
-        task = asyncio.create_task(auto_delete_message(context, chat_id, message_id, delay))
-        message_deletion_tasks[task_key] = task
-        
-        logger.info(f"Scheduled deletion for message {message_id} in {delay} seconds")
-    except Exception as e:
-        logger.error(f"Error scheduling deletion: {e}")
 
 # ==================== FORCE JOIN CHECK ====================
 async def check_user_membership(context, user_id):
@@ -497,6 +458,34 @@ def create_episode_selection_keyboard(episodes, season_num):
         logger.error(f"Error creating episode keyboard: {e}")
         return None
 
+# ==================== AUTO DELETE HELPER ====================
+async def delete_messages_after_delay(context, chat_id, message_ids, delay=60):
+    """Delete messages after delay"""
+    try:
+        await asyncio.sleep(delay)
+        for msg_id in message_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.debug(f"Could not delete message {msg_id}: {e}")
+    except Exception as e:
+        logger.error(f"Error in delete_messages_after_delay: {e}")
+
+def schedule_delete(context, chat_id, message_ids, delay=None):
+    """Helper to schedule auto-deletion for messages"""
+    try:
+        if not message_ids:
+            return
+        if delay is None:
+            delay = AUTO_DELETE_DELAY
+
+        # Use the application's event loop to schedule the task
+        asyncio.get_running_loop().create_task(
+            delete_messages_after_delay(context, chat_id, message_ids, delay)
+        )
+    except Exception as e:
+        logger.error(f"Error scheduling delete: {e}")
+
 # ==================== SEND MOVIE FILE ====================
 async def send_movie_file(update, context, title, url=None, file_id=None):
     """Send movie file with auto-delete"""
@@ -521,7 +510,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                 reply_markup=get_force_join_keyboard(),
                 parse_mode='Markdown'
             )
-            schedule_message_deletion(context, chat_id, access_msg.message_id)
+            schedule_delete(context, chat_id, [access_msg.message_id])
             return
         
         warning_msg = await context.bot.send_message(
@@ -573,8 +562,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                     text=f"🔗 **{title}**\n\n[Click here to watch]({url})",
                     parse_mode='Markdown'
                 )
-                schedule_message_deletion(context, chat_id, warning_msg.message_id, AUTO_DELETE_FILE_DELAY)
-                schedule_message_deletion(context, chat_id, link_msg.message_id, AUTO_DELETE_FILE_DELAY)
+                schedule_delete(context, chat_id, [warning_msg.message_id, link_msg.message_id], 60)
                 return
         elif url:
             keyboard = InlineKeyboardMarkup([[
@@ -587,8 +575,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
-            schedule_message_deletion(context, chat_id, warning_msg.message_id, AUTO_DELETE_FILE_DELAY)
-            schedule_message_deletion(context, chat_id, link_msg.message_id, AUTO_DELETE_FILE_DELAY)
+            schedule_delete(context, chat_id, [warning_msg.message_id, link_msg.message_id], 60)
             return
         else:
             nofile_msg = await context.bot.send_message(
@@ -596,13 +583,11 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                 text=f"❌ Sorry, no file available for **{title}**",
                 parse_mode='Markdown'
             )
-            schedule_message_deletion(context, chat_id, warning_msg.message_id, AUTO_DELETE_FILE_DELAY)
-            schedule_message_deletion(context, chat_id, nofile_msg.message_id, AUTO_DELETE_FILE_DELAY)
+            schedule_delete(context, chat_id, [warning_msg.message_id, nofile_msg.message_id], 60)
             return
         
         if sent_msg and warning_msg:
-            schedule_message_deletion(context, chat_id, warning_msg.message_id, AUTO_DELETE_FILE_DELAY)
-            schedule_message_deletion(context, chat_id, sent_msg.message_id, AUTO_DELETE_FILE_DELAY)
+            schedule_delete(context, chat_id, [warning_msg.message_id, sent_msg.message_id], 60)
     
     except Exception as e:
         logger.error(f"Error sending file: {e}")
@@ -611,13 +596,13 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                 chat_id=chat_id,
                 text="❌ Failed to send file."
             )
-            schedule_message_deletion(context, chat_id, err_msg.message_id)
+            schedule_delete(context, chat_id, [err_msg.message_id])
         except:
             pass
 
 # ==================== BOT HANDLERS ====================
 async def start(update, context):
-    """Start command - Premium Style"""
+    """Start command"""
     try:
         if context.args and context.args[0].startswith("movie_"):
             try:
@@ -661,7 +646,7 @@ async def start(update, context):
             "🛡 Auto‑delete privacy enabled\n"
             "📂 Seasons • Episodes • Clean UI\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "▶️ **Type any movie / series name to start...**\n"
+            "▶️ *Type any movie / series name to start...*\n"
             "`Avengers Endgame`\n"
             "`Stranger Things S01E01`\n"
             "`KGF 2 2022`"
@@ -673,10 +658,7 @@ async def start(update, context):
             parse_mode='Markdown',
             reply_markup=start_keyboard
         )
-        
-        # Auto delete after delay
-        schedule_message_deletion(context, chat_id, banner_msg.message_id, AUTO_DELETE_DELAY)
-        
+        schedule_delete(context, chat_id, [banner_msg.message_id])
         return MAIN_MENU
     except Exception as e:
         logger.error(f"Error in start: {e}")
@@ -689,7 +671,7 @@ async def search_movies(update, context):
         
         if not await check_rate_limit(update.effective_user.id):
             msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
-            schedule_message_deletion(context, chat_id, msg.message_id)
+            schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
         user_message = update.message.text.strip()
@@ -714,7 +696,7 @@ async def search_movies(update, context):
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
-            schedule_message_deletion(context, chat_id, msg.message_id)
+            schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
         elif len(movies_found) == 1:
@@ -733,7 +715,7 @@ async def search_movies(update, context):
                             reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
                             parse_mode='Markdown'
                         )
-                        schedule_message_deletion(context, chat_id, msg.message_id)
+                        schedule_delete(context, chat_id, [msg.message_id])
                         return MAIN_MENU
             
             qualities = get_all_movie_qualities(movie_id)
@@ -743,7 +725,7 @@ async def search_movies(update, context):
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                     parse_mode='Markdown'
                 )
-                schedule_message_deletion(context, chat_id, msg.message_id)
+                schedule_delete(context, chat_id, [msg.message_id])
             elif qualities:
                 quality, url_q, file_id_q, _ = qualities[0]
                 await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
@@ -756,7 +738,7 @@ async def search_movies(update, context):
                 reply_markup=create_movie_selection_keyboard(movies_found),
                 parse_mode='Markdown'
             )
-            schedule_message_deletion(context, chat_id, msg.message_id)
+            schedule_delete(context, chat_id, [msg.message_id])
         
         return MAIN_MENU
     
@@ -765,7 +747,7 @@ async def search_movies(update, context):
         if update.effective_chat.type == "private":
             try:
                 msg = await update.message.reply_text("❌ Something went wrong. Please try again.")
-                schedule_message_deletion(context, chat_id, msg.message_id)
+                schedule_delete(context, chat_id, [msg.message_id])
             except:
                 pass
         return MAIN_MENU
@@ -778,7 +760,6 @@ async def group_message_handler(update, context):
         
         message_text = update.message.text.strip()
         user = update.effective_user
-        chat_id = update.effective_chat.id
         
         if len(message_text) < 4 or message_text.startswith('/'):
             return
@@ -807,9 +788,7 @@ async def group_message_handler(update, context):
             parse_mode='Markdown'
         )
         
-        # Auto delete group prompts after 2 minutes
-        schedule_message_deletion(context, chat_id, reply_msg.message_id, 120)
-        
+        schedule_delete(context, update.effective_chat.id, [reply_msg.message_id], 120)
     except Exception as e:
         logger.error(f"Group handler error: {e}")
 
@@ -818,7 +797,6 @@ async def button_callback(update, context):
     try:
         query = update.callback_query
         await query.answer()
-        chat_id = query.message.chat.id
         
         if query.data == "check_membership":
             is_member = await check_user_membership(context, query.from_user.id)
@@ -829,7 +807,7 @@ async def button_callback(update, context):
                     "You can now search for movies and series.",
                     parse_mode='Markdown'
                 )
-                schedule_message_deletion(context, chat_id, query.message.message_id)
+                schedule_delete(context, query.message.chat.id, [query.message.message_id])
             else:
                 await query.answer("❌ Please join both Channel and Group first!", show_alert=True)
             return
@@ -845,7 +823,7 @@ async def button_callback(update, context):
                 "`Avengers Endgame`\n"
                 "`Stranger Things S01E01`"
             )
-            await query.edit_message_caption(caption=help_text, parse_mode='Markdown')
+            await query.edit_message_text(help_text, parse_mode='Markdown')
             return
         
         if query.data == "start_about":
@@ -858,7 +836,7 @@ async def button_callback(update, context):
                 "📢 @filmfybox\n"
                 "💬 @Filmfybox002"
             )
-            await query.edit_message_caption(caption=about_text, parse_mode='Markdown')
+            await query.edit_message_text(about_text, parse_mode='Markdown')
             return
         
         if query.data == "search_tips":
@@ -874,9 +852,6 @@ async def button_callback(update, context):
             )
             await query.edit_message_text(tips_text, parse_mode='Markdown')
             return
-        
-        # All other callbacks follow similar pattern...
-        # [Rest of your callback handlers remain the same, just add schedule_message_deletion where needed]
         
         if query.data.startswith("group_get_"):
             parts = query.data.split('_')
@@ -909,14 +884,14 @@ async def button_callback(update, context):
                         qualities = get_all_movie_qualities(movie_id)
                         
                         if qualities and len(qualities) > 1:
-                            pm_msg = await context.bot.send_message(
+                            await context.bot.send_message(
                                 chat_id=original_user_id,
                                 text=f"🎬 **{title}**\n\nSelect Quality ⬇️",
                                 reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                                 parse_mode='Markdown'
                             )
-                            schedule_message_deletion(context, original_user_id, pm_msg.message_id)
                         else:
+                            # Fake a minimal update for private chat sending
                             dummy_update = Update(
                                 update_id=0,
                                 message=telegram.Message(
@@ -941,10 +916,121 @@ async def button_callback(update, context):
                 )
             return
         
+        if query.data.startswith("select_"):
+            movie_id = int(query.data.replace("select_", ""))
+            
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    title, url, file_id = result
+                    qualities = get_all_movie_qualities(movie_id)
+                    
+                    if qualities and len(qualities) > 1:
+                        await query.edit_message_text(
+                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await send_movie_file(update, context, title, url, file_id)
+                        await query.edit_message_text("✅ Sent!")
+            return
+        
+        if query.data.startswith("season_"):
+            parts = query.data.split('_', 2)
+            season_num = int(parts[1])
+            
+            seasons_data = context.user_data.get('series_data', {})
+            episodes = seasons_data.get(season_num, [])
+            
+            if episodes:
+                await query.edit_message_text(
+                    f"📺 Season {season_num}\n\nSelect Episode ⬇️",
+                    reply_markup=create_episode_selection_keyboard(episodes, season_num),
+                    parse_mode='Markdown'
+                )
+            return
+        
+        if query.data.startswith("movie_"):
+            movie_id = int(query.data.replace("movie_", ""))
+            
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    title, url, file_id = result
+                    qualities = get_all_movie_qualities(movie_id)
+                    
+                    if qualities and len(qualities) > 1:
+                        await query.edit_message_text(
+                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
+                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await send_movie_file(update, context, title, url, file_id)
+                        await query.edit_message_text("✅ Sent!")
+            return
+        
+        if query.data.startswith("quality_"):
+            parts = query.data.split('_', 2)
+            movie_id = int(parts[1])
+            selected_quality = parts[2].replace('_', ' ')
+            
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("SELECT title FROM movies WHERE id = %s", (movie_id,))
+                title_res = cur.fetchone()
+                title = title_res[0] if title_res else "Movie"
+                
+                cur.execute("""
+                    SELECT url, file_id FROM movie_files
+                    WHERE movie_id = %s AND quality = %s
+                """, (movie_id, selected_quality))
+                file_data = cur.fetchone()
+                
+                if not file_data:
+                    cur.execute("SELECT url, file_id FROM movies WHERE id = %s", (movie_id,))
+                    file_data = cur.fetchone()
+                
+                cur.close()
+                conn.close()
+                
+                if file_data:
+                    url, file_id = file_data
+                    await query.edit_message_text(f"📤 Sending **{title}**...", parse_mode='Markdown')
+                    await send_movie_file(update, context, f"{title} [{selected_quality}]", url, file_id)
+                else:
+                    await query.edit_message_text("❌ File not found!")
+            return
+        
+        if query.data.startswith("page_"):
+            page = int(query.data.replace("page_", ""))
+            movies = context.user_data.get('search_results', [])
+            if movies:
+                await query.edit_message_text(
+                    f"🔍 **Found {len(movies)} results**\n\nSelect one ⬇️",
+                    reply_markup=create_movie_selection_keyboard(movies, page),
+                    parse_mode='Markdown'
+                )
+            return
+        
         if query.data == "cancel_selection":
             await query.edit_message_text("❌ Cancelled.")
             return
-        
+    
     except Exception as e:
         logger.error(f"Callback error: {e}")
         try:
@@ -967,23 +1053,32 @@ async def error_handler(update, context):
         if isinstance(update, Update) and update.effective_message:
             try:
                 msg = await update.effective_message.reply_text("❌ Something went wrong. Please try again.")
-                schedule_message_deletion(context, update.effective_chat.id, msg.message_id)
+                schedule_delete(context, update.effective_chat.id, [msg.message_id])
             except:
                 pass
     except:
         pass
 
 # ==================== MAIN BOT ====================
+
+def run_flask():
+    """Run Flask server for hosting platforms that require a port (e.g. Render Web Service)"""
+    try:
+        port = int(os.environ.get("PORT", "10000"))
+        logger.info(f"Starting Flask server on port {port} for health checks / port binding...")
+        app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        logger.error(f"Failed to start Flask server: {e}")
+
 def main():
     """Run the Telegram bot"""
     try:
         logger.info("Starting FilmfyBox Premium Bot...")
-        
-        # Start Flask server in background thread for port binding
-        flask_thread = threading.Thread(target=run_flask)
-        flask_thread.daemon = True
+
+        # If you are deploying as a Web Service on Render / Railway etc.,
+        # this keeps a HTTP port open so the platform doesn't kill the container.
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        logger.info(f"Flask server started on port {PORT}")
         
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).build()
         
@@ -1005,7 +1100,6 @@ def main():
         
         logger.info("Bot started successfully! 🎬")
         application.run_polling()
-        
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         sys.exit(1)
