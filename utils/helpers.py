@@ -1,5 +1,3 @@
-utils/helpers.py
-
 import asyncio
 import logging
 from telegram.error import BadRequest
