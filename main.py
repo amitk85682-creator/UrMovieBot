@@ -280,6 +280,28 @@ def get_movie_from_db(user_query):
             except:
                 pass
 
+def get_similar_movies(base_title):
+    """Finds all movies that match the base title for multiple qualities."""
+    try:
+        conn = get_db_connection()
+        if not conn: return []
+        cur = conn.cursor()
+        
+        # मूवी के नाम से एक्स्ट्रा स्पेस और साल/क्वालिटी हटाकर सर्च करते हैं
+        # ताकि "Pathan 720p" और "Pathan 1080p" दोनों मिल जाएं
+        clean_name = base_title.split(' 480')[0].split(' 720')[0].split(' 1080')[0].strip()
+        
+        query = "SELECT id, title, url, file_id FROM movies WHERE title ILIKE %s ORDER BY title"
+        cur.execute(query, (f"%{clean_name}%",))
+        results = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        return results
+    except Exception as e:
+        logger.error(f"Error getting similar movies: {e}")
+        return []
+
 # ==================== KEYBOARD MARKUPS ====================
 def get_start_keyboard():
     """Start menu keyboard exactly as per your image"""
@@ -343,32 +365,42 @@ async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, m
         chat_id = user_id
 
         # --- PART A: MULTI-QUALITY CHECK ---
-        # अगर यह पहली बार सर्च है (बटन से क्लिक नहीं किया गया), तो हम चेक करेंगे कि और क्वालिटी हैं या नहीं
         if check_qualities:
             similar_movies = get_similar_movies(title)
             
-            # अगर 1 से ज्यादा रिजल्ट मिले, तो यूजर को चुनने दें
+            # अगर 1 से ज्यादा फाइलें मिलीं
             if len(similar_movies) > 1:
+                
+                # SAFETY: अगर 10 से ज्यादा फाइलें हैं, तो सिर्फ टॉप 10 दिखाएं (ताकि बॉट क्रैश न हो)
+                similar_movies = similar_movies[:10]
+
                 keyboard = []
                 row = []
                 for mov in similar_movies:
                     m_id, m_title, _, _ = mov
-                    # बटन पर पूरा नाम या सिर्फ क्वालिटी दिखा सकते हैं
-                    # हम बटन का नाम थोड़ा छोटा कर रहे हैं ताकि फिट हो जाए
-                    btn_text = m_title.replace(title.split()[0], "").strip() or "🎬 View File"
-                    if len(btn_text) > 20: btn_text = m_title[:20] + "..."
                     
-                    # callback_data में 'quality_' prefix लगा रहे हैं
+                    # बटन का नाम छोटा और साफ़ करें
+                    # जैसे: "Jawan 720p Hindi" -> "📁 720p Hindi"
+                    clean_text = m_title.replace(title.split()[0], "").strip()
+                    # अगर नाम खाली हो गया (exact match), तो 'View File' लिखें
+                    btn_text = clean_text if clean_text else "🎬 View File"
+                    
+                    # बहुत लंबा नाम हो तो काट दें
+                    if len(btn_text) > 15: btn_text = btn_text[:15] + ".."
+                    
                     row.append(InlineKeyboardButton(f"📁 {btn_text}", callback_data=f"quality_{m_id}"))
                     
-                    if len(row) == 2: # एक लाइन में 2 बटन
+                    # एक लाइन में 2 बटन का लॉजिक
+                    if len(row) == 2:
                         keyboard.append(row)
                         row = []
+                
+                # अगर कोई बटन बच गया हो (जैसे 5वां बटन), उसे आखिरी लाइन में जोड़ें
                 if row: keyboard.append(row)
 
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"🎬 <b>{title}</b>\n\n✅ <b>Multiple qualities found!</b>\n👇 <i>Please select one:</i>",
+                    text=f"🎬 <b>{title}</b>\n\n✅ <b>Multiple Qualities Found!</b>\n👇 <i>Choose your quality:</i>",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='HTML'
                 )
@@ -438,6 +470,7 @@ async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, m
 
     except Exception as e:
         logger.error(f"Send Movie Error: {e}")
+
 # ==================== TELEGRAM BOT HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - with deep link support for movie delivery"""
@@ -538,9 +571,36 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
+    data = query.data
 
     try:
-        if query.data == "help":
+        # --- HANDLE QUALITY SELECTION ---
+        if data.startswith("quality_"):
+            movie_id = int(data.split("_")[1])
+            
+            # Database से स्पेसिफिक मूवी डेटा निकालें
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+                movie_data = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if movie_data:
+                    # पिछले सिलेक्शन मैसेज को डिलीट करें
+                    try:
+                        await query.message.delete()
+                    except:
+                        pass
+                    
+                    # अब फाइल भेजें (check_qualities=False पास करें ताकि दोबारा बटन न आएं)
+                    await send_movie_to_user(context, query.from_user.id, movie_data, check_qualities=False)
+                else:
+                    await query.message.reply_text("❌ यह फाइल अब उपलब्ध नहीं है।")
+
+        # --- EXISTING HANDLERS ---
+        elif data == "help":
             help_text = """
 ❓ **Help - कैसे उपयोग करें?**
 
@@ -560,7 +620,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
-        elif query.data == "about":
+        elif data == "about":
             about_text = """
 ℹ️ **About {BOT_NAME}**
 
@@ -582,7 +642,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
-        elif query.data == "check_membership":
+        elif data == "check_membership":
             # Always return True — skip membership check (no admin required)
             msg = await query.edit_message_text(
                 text="✅ आपको चैनल और ग्रुप में जॉइन होने का स्टेटस कन्फर्म हुआ!",
