@@ -258,24 +258,27 @@ def get_movies_from_db(user_query, limit=10):
             conn.close()
             return []
         
-        movie_titles = [movie<!--citation:1--> for movie in all_movies]
-        movie_dict = {movie<!--citation:1-->: movie for movie in all_movies}
+        movie_titles = [movie[1] for movie in all_movies]
+movie_dict = {movie[1]: movie for movie in all_movies}
+
+matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
+
+filtered_movies = []
+for match in matches:
+    # process.extract returns a tuple (matched_string, score)
+    if len(match) >= 2:
+        title = match[0]
+        score = match[1] # Fix: match-> match[1]
         
-        matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
-        
-        filtered_movies = []
-        for match in matches:
-            if len(match) >= 2:
-                title, score = match, match<!--citation:1-->
-                if score >= 65 and title in movie_dict:
-                    movie_data = movie_dict[title]
-                    filtered_movies.append((
-                        movie_data,
-                        movie_data<!--citation:1-->,
-                        movie_data<!--citation:2-->,
-                        movie_data<!--citation:3-->,
-                        is_series(movie_data<!--citation:1-->)
-                    ))
+        if score >= 65 and title in movie_dict:
+            movie_data = movie_dict[title]
+            filtered_movies.append((
+                movie_data,       # पूरा ऑब्जेक्ट या ID (context पर निर्भर करता है)
+                movie_data[1],    # Fix: movie_data-> Title
+                movie_data[2],    # Fix: movie_data-> Description/Year
+                movie_data[3],    # Fix: movie_data-> Image URL
+                is_series(movie_data[1]) # Fix: Title pass किया गया
+            ))
         
         cur.close()
         conn.close()
@@ -630,7 +633,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle deep link
     if context.args and context.args.startswith("movie_"):
         try:
-            movie_id = int(context.args.split('_')<!--citation:1-->)
+            movie_id = int(context.args.split('_')[1])
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
@@ -947,9 +950,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Group get
         if query.data.startswith("group_get_"):
-            parts = query.data.split('_')
-            movie_id = int(parts<!--citation:2-->)
-            original_user_id = int(parts<!--citation:3-->)
+    parts = query.data.split('_')
+    movie_id = int(parts[2]) # parts-> parts[2]
+    original_user_id = int(parts[3]) # parts-> parts[3]
             
             if query.from_user.id != original_user_id:
                 await query.answer("This button is not for you!", show_alert=True)
@@ -1073,7 +1076,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Season selection
         if query.data.startswith("season_"):
             parts = query.data.split('_', 2)
-            season_num = int(parts<!--citation:1-->)
+            season_num = int(parts[2])
             
             seasons_data = context.user_data.get('series_data', {})
             episodes = seasons_data.get(season_num, [])
@@ -1116,8 +1119,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Quality selection
         if query.data.startswith("quality_"):
             parts = query.data.split('_', 2)
-            movie_id = int(parts<!--citation:1-->)
-            selected_quality = parts<!--citation:2-->.replace('_', ' ')
+            movie_id = int(parts[2])
+            selected_quality = parts[3].replace('_', ' ')
             
             conn = get_db_connection()
             if conn:
