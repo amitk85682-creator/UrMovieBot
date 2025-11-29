@@ -40,27 +40,82 @@ async def show_auto_menu(context,chat_id, anchor):
         f"🎬 <b>{info['base'].title()}</b>\nSelect Quality:",
         reply_markup=quality_kb(qmap), parse_mode='HTML')
 
-async def send_file(context,chat_id,id,title,url,file_id):
-    from config import AUTO_DELETE_SEC
+async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, movie_id, title, url=None, file_id=None):
     from templates.captions import premium
-    msg_wait=await context.bot.send_message(chat_id,"⏳ Preparing file…")
-    sent=None
+    from utils.helpers import auto_delete
+    from config import CHANNEL_LINK
+    import asyncio
+
+    warning_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="⚠️ ❌👉This file will be deleted automatically in 1 minute❗️Please forward to another chat if needed.",
+        parse_mode='HTML'
+    )
+
+    sent_msg = None
+    caption_text = premium(title)
+
+    # Custom join button
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔗 Join Channel", url=CHANNEL_LINK)
+    ]])
+
     try:
+        # A) Send file using file_id
         if file_id:
-            sent=await context.bot.send_document(chat_id,file_id,caption=premium(title),parse_mode='HTML')
-        elif url and "t.me" in url:
-            from urllib.parse import urlparse
-            parts=urlparse(url).path.strip("/").split("/")
-            if parts[0]=="c":
-                from_chat=int("-100"+parts[1]); mid=int(parts[2])
-            else:
-                from_chat="@"+parts[0]; mid=int(parts[1])
-            sent=await context.bot.copy_message(chat_id,from_chat,mid,caption=premium(title),parse_mode='HTML')
+            sent_msg = await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_id,
+                caption=caption_text,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+
+        # B) Telegram Private/Group Link (copy)
+        elif url and url.startswith("https://t.me/"):
+            try:
+                parts = url.rstrip('/').split('/')
+                if "/c/" in url:
+                    # t.me/c/<chat_id>/<msg_id>
+                    from_chat_id = int("-100" + parts[-2])
+                else:
+                    # public channel: t.me/username/<msg_id>
+                    from_chat_id = "@" + parts[-2]
+                msg_id = int(parts[-1])
+
+                sent_msg = await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=from_chat_id,
+                    message_id=msg_id,
+                    caption=caption_text,
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🎬 {title}\n\n🔗 {url}",
+                    reply_markup=keyboard,
+                    parse_mode='HTML'
+                )
+
+        # C) Plain URL (fallback)
+        elif url:
+            sent_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎬 <b>{title}</b>\n\n🔗 <b>Download:</b> {url}",
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+
+        # D) Nothing to send
         else:
-            await context.bot.send_message(chat_id,f"🔗 {url}\n\n{premium(title)}",parse_mode='HTML')
+            await context.bot.send_message(chat_id, "❌ File not available.")
+
     except Exception as e:
-        log.error(e); await context.bot.send_message(chat_id,"❌ Failed to send.")
-    try: await context.bot.delete_message(chat_id,msg_wait.message_id)
-    except: pass
-    if sent:
-        asyncio.create_task(auto_delete(context,chat_id,sent.message_id,AUTO_DELETE_SEC))
+        logger.error(f"Error sending file: {e}")
+        await context.bot.send_message(chat_id, "❌ Could not send file. Try again later.")
+
+    if sent_msg:
+        asyncio.create_task(auto_delete(context, chat_id, sent_msg.message_id, 60))
+        asyncio.create_task(auto_delete(context, chat_id, warning_msg.message_id, 60))
