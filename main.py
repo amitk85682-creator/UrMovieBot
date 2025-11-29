@@ -281,38 +281,39 @@ def get_movie_from_db(user_query):
                 pass
 
 def get_similar_movies(base_title):
-    """Finds all movies that match the base title for multiple qualities using Regex."""
+    """Finds all movies/seasons matching the base title by stripping Season/Quality info."""
     try:
         conn = get_db_connection()
         if not conn: return []
         cur = conn.cursor()
         
-        # --- FIXED CLEANING LOGIC ---
-        # 1. Convert to lower case for processing
+        # 1. लोअर केस में कन्वर्ट करें
         clean_name = base_title.lower()
-        
-        # 2. Use Regex to remove qualities like 480p, 720p, 1080p, 2k, 4k, etc.
-        # This handles: "Movie 720p", "Movie-720p", "Movie (720p)", "Movie [720p]"
-        clean_name = re.split(r'[\(\[\-\s](480|720|1080|2160|2k|4k|hd|sd|cam)p?', clean_name)[0]
-        
-        # 3. Remove common season/episode formatting if you want to group seasons together
-        # (Optional: Comment out the next line if you treat S01 and S02 as different movies)
-        # clean_name = re.split(r'[\(\[\-\s](s\d+|season)', clean_name)[0]
 
-        clean_name = clean_name.strip()
+        # 2. REGEX: Season, Episode, Volume, Part और Quality को हटाने के लिए
+        # यह पैटर्न " S01", " Season", " Vol", " 720p", " 2024" आदि के बाद सब कुछ हटा देगा
+        # ताकि हमें सिर्फ "stranger things" मिले
+        pattern = r"(?i)(?:\s(season|s\d+|vol|volume|part|ep|episode|ch|chapter|\d{3,4}p|4k|hd|hindi|dual|dubbed).*)"
         
-        logger.info(f"🔍 Searching similar movies for base name: '{clean_name}' (Original: {base_title})")
+        # नाम को split करें और पहला हिस्सा (Base Name) लें
+        clean_name = re.split(pattern, clean_name)[0]
         
-        # 4. Search in DB
+        # एक्स्ट्रा स्पेस और स्पेशल कैरेक्टर हटाएं
+        clean_name = clean_name.replace(":", "").replace("-", "").strip()
+
+        logger.info(f"🔍 Base Search Name: '{clean_name}' (Original: {base_title})")
+        
+        # 3. सर्च क्वेरी: अब यह 'stranger things' ढूंढेगा, जिससे S1 से S5 सब आ जाएंगे
         query = "SELECT id, title, url, file_id FROM movies WHERE title ILIKE %s ORDER BY title"
         cur.execute(query, (f"%{clean_name}%",))
         results = cur.fetchall()
         
-        logger.info(f"✅ Found {len(results)} similar files for '{clean_name}'")
+        logger.info(f"✅ Found {len(results)} matches for '{clean_name}'")
         
         cur.close()
         conn.close()
         return results
+
     except Exception as e:
         logger.error(f"Error getting similar movies: {e}")
         return []
