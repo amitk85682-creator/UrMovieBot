@@ -906,140 +906,117 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Search tips
-        if query.data == "search_tips":
-            await query.edit_message_text(
-                text=(
-                    "🔍 **Search Tips**\n\n"
-                    "✅ **Good Examples:**\n"
-                    "• `Inception 2010`\n"
-                    "• `Breaking Bad S01 E01`\n"
-                    "• `The Dark Knight`\n\n"
-                    "❌ **Avoid:**\n"
-                    "• Emojis (🎬, ❤️)\n"
-                    "• Words like 'download', 'watch'\n"
-                    "• Wrong spelling\n\n"
-                    "💡 **Pro Tips:**\n"
-                    "• Copy name from Google/IMDB\n"
-                    "• Add release year\n"
-                    "• For series: Use S01 E01 format\n\n"
-                    "⚡ Happy searching!"
-                ),
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data="cancel_selection")
-                ]]),
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Back to start
-        if query.data == "back_to_start":
-            user = query.from_user
-            await query.edit_message_caption(
-                caption=(
-                    f"👋 **Hey {user.first_name}!**\n\n"
-                    f"⚡ Welcome to **Ur Movie Bot** ⚡\n\n"
-                    f"🎬 Your personal Netflix! 🍿\n\n"
-                    f"━━━━━━━━━━━━━━━━━\n"
-                    f"📚 **10,000+ Movies**\n"
-                    f"📺 **5,000+ Series**\n"
-                    f"🎥 **HD Quality**\n"
-                    f"⚡ **Fast Delivery**\n"
-                    f"━━━━━━━━━━━━━━━━━\n\n"
-                    f"💡 **How to use:**\n"
-                    f"• Type movie/series name\n"
-                    f"• Select from results\n"
-                    f"• Choose quality\n"
-                    f"• Enjoy! ✨\n\n"
-                    f"⚡ Start searching now!"
-                ),
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Group get
+        # ...
+# Back to start
+if query.data == "back_to_start":
+    user = query.from_user
+    await query.edit_message_caption(
+        caption=(
+            f"👋 **Hey {user.first_name}!**\n\n"
+            f"⚡ Welcome to **Ur Movie Bot** ⚡\n\n"
+            f"🎬 Your personal Netflix! 🍿\n\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"📚 **10,000+ Movies**\n"
+            f"📺 **5,000+ Series**\n"
+            f"🎥 **HD Quality**\n"
+            f"⚡ **Fast Delivery**\n"
+            f"━━━━━━━━━━━━━━━━━\n\n"
+            f"💡 **How to use:**\n"
+            f"• Type movie/series name\n"
+            f"• Select from results\n"
+            f"• Choose quality\n"
+            f"• Enjoy! ✨\n\n"
+            f"⚡ Start searching now!"
+        ),
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode='Markdown'
+    )
+    return
+# 
+# Group get
 if query.data.startswith("group_get_"):
-            parts = query.data.split('_')
-            movie_id = int(parts[2])
-            original_user_id = int(parts[3])
-            
-            if query.from_user.id != original_user_id:
-                await query.answer("This button is not for you!", show_alert=True)
-                return
+    # Fix: Indentation added to align with the rest of the block (8 spaces from the margin)
+    parts = query.data.split('_')
+    movie_id = int(parts[2])
+    original_user_id = int(parts[3])
+    
+    if query.from_user.id != original_user_id:
+        await query.answer("This button is not for you!", show_alert=True)
+        return
+    
+    is_member = await check_user_membership(context, original_user_id)
+    if not is_member:
+        await query.edit_message_text(
+            "🚫 **Join Required!**\n\n"
+            "Please join our Channel and Group first.",
+            reply_markup=get_force_join_keyboard()
+        )
+        return
+    
+    try:
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+            movie_data = cur.fetchone()
+            cur.close()
+            conn.close()
             
-            is_member = await check_user_membership(context, original_user_id)
-            if not is_member:
-                await query.edit_message_text(
-                    "🚫 **Join Required!**\n\n"
-                    "Please join our Channel and Group first.",
-                    reply_markup=get_force_join_keyboard()
-                )
-                return
-            
-            try:
-                conn = get_db_connection()
-                if conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                    movie_data = cur.fetchone()
-                    cur.close()
-                    conn.close()
-                    
-                    if movie_data:
-                        title, url, file_id = movie_data
+            if movie_data:
+                title, url, file_id = movie_data
+                
+                if is_series(title):
+                    info = parse_series_info(title)
+                    seasons_data = get_series_episodes(info['base_title'])
+                    if seasons_data:
+                        context.user_data['series_data'] = seasons_data
+                        context.user_data['base_title'] = info['base_title']
                         
-                        if is_series(title):
-                            info = parse_series_info(title)
-                            seasons_data = get_series_episodes(info['base_title'])
-                            if seasons_data:
-                                context.user_data['series_data'] = seasons_data
-                                context.user_data['base_title'] = info['base_title']
-                                
-                                msg = await context.bot.send_message(
-                                    chat_id=original_user_id,
-                                    text=f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
-                                    reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
-                                    parse_mode='Markdown'
-                                )
-                                asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
-                                await query.edit_message_text("✅ Check your PM!")
-                                return
-                        
-                        qualities = get_all_movie_qualities(movie_id)
-                        if qualities and len(qualities) > 1:
-                            msg = await context.bot.send_message(
-                                chat_id=original_user_id,
-                                text=f"🎬 **{title}**\n\n⬇️ Select Quality:",
-                                reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                                parse_mode='Markdown'
-                            )
-                            asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
-                        else:
-                            dummy_update = Update(
-                                update_id=0,
-                                message=telegram.Message(
-                                    message_id=0,
-                                    date=datetime.now(),
-                                    chat=telegram.Chat(id=original_user_id, type='private')
-                                )
-                            )
-                            await send_movie_file(dummy_update, context, title, url, file_id)
-                        
+                        msg = await context.bot.send_message(
+                            chat_id=original_user_id,
+                            text=f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
+                            reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
+                            parse_mode='Markdown'
+                        )
+                        asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
                         await query.edit_message_text("✅ Check your PM!")
-                        
-            except telegram.error.Forbidden:
-                bot_username = (await context.bot.get_me()).username
-                deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🤖 Start Bot", url=deep_link),
-                    InlineKeyboardButton("🔄 Try Again", callback_data=query.data)
-                ]])
-                await query.edit_message_text(
-                    "❌ **Can't send message!**\n\n"
-                    "Please start the bot first, then try again.",
-                    reply_markup=keyboard
-                )
-            return
+                        return
+                
+                qualities = get_all_movie_qualities(movie_id)
+                if qualities and len(qualities) > 1:
+                    msg = await context.bot.send_message(
+                        chat_id=original_user_id,
+                        text=f"🎬 **{title}**\n\n⬇️ Select Quality:",
+                        reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
+                        parse_mode='Markdown'
+                    )
+                    asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
+                else:
+                    dummy_update = Update(
+                        update_id=0,
+                        message=telegram.Message(
+                            message_id=0,
+                            date=datetime.now(),
+                            chat=telegram.Chat(id=original_user_id, type='private')
+                        )
+                    )
+                    await send_movie_file(dummy_update, context, title, url, file_id)
+                
+                await query.edit_message_text("✅ Check your PM!")
+                
+    except telegram.error.Forbidden:
+        bot_username = (await context.bot.get_me()).username
+        deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🤖 Start Bot", url=deep_link),
+            InlineKeyboardButton("🔄 Try Again", callback_data=query.data)
+        ]])
+        await query.edit_message_text(
+            "❌ **Can't send message!**\n\n"
+            "Please start the bot first, then try again.",
+            reply_markup=keyboard
+        )
+    return
         
         # Movie selection
         if query.data.startswith("select_"):
