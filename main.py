@@ -245,43 +245,50 @@ def get_movies_from_db(user_query, limit=10):
             for match in exact_matches:
                 movie_id, title, url, file_id = match
                 results.append((movie_id, title, url, file_id, is_series(title)))
+            
+            # कनेक्शन यहां बंद नहीं होना चाहिए क्योंकि यह try ब्लॉक के अंदर है,
+            # लेकिन अगर आप इसे जल्दी बंद करना चाहते हैं, तो यह ठीक है।
             cur.close()
-            conn.close()
+            conn.close() 
             return results
         
-        # Fuzzy matching
+        # Fuzzy matching (अब यह पूरा ब्लॉक 'try' के अंदर है)
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
         
         if not all_movies:
-            cur.close()
-            conn.close()
+            # cur.close() # finally ब्लॉक इसे हैंडल करेगा
+            # conn.close() # finally ब्लॉक इसे हैंडल करेगा
             return []
         
+        # Fix: Indentation issue resolved. The following lines are now part of the 'try' block.
         movie_titles = [movie[1] for movie in all_movies]
-movie_dict = {movie[1]: movie for movie in all_movies}
+        movie_dict = {movie[1]: movie for movie in all_movies}
 
-matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
+        matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
 
-filtered_movies = []
-for match in matches:
-    # process.extract returns a tuple (matched_string, score)
-    if len(match) >= 2:
-        title = match[0]
-        score = match[1] # Fix: match-> match[1]
+        filtered_movies = []
+        for match in matches:
+            # process.extract returns a tuple (matched_string, score)
+            if len(match) >= 2:
+                title = match[0]
+                score = match[1] 
+                
+                if score >= 65 and title in movie_dict:
+                    movie_data = movie_dict[title]
+                    # movie_data indices are: [0]=id, [1]=title, [2]=url, [3]=file_id
+                    filtered_movies.append((
+                        movie_data[0],       # ID
+                        movie_data[1],       # Title
+                        movie_data[2],       # URL
+                        movie_data[3],       # File ID
+                        is_series(movie_data[1]) 
+                    ))
         
-        if score >= 65 and title in movie_dict:
-            movie_data = movie_dict[title]
-            filtered_movies.append((
-                movie_data,       # पूरा ऑब्जेक्ट या ID (context पर निर्भर करता है)
-                movie_data[1],    # Fix: movie_data-> Title
-                movie_data[2],    # Fix: movie_data-> Description/Year
-                movie_data[3],    # Fix: movie_data-> Image URL
-                is_series(movie_data[1]) # Fix: Title pass किया गया
-            ))
+        # अगर Fuzzy Match सफल होता है, तो यहां filtered_movies वापस करें
+        # और cur/conn को finally ब्लॉक में बंद करें।
+        # सुरक्षा के लिए, मैं cur/conn.close() को finally में ही रखना पसंद करूंगा।
         
-        cur.close()
-        conn.close()
         return filtered_movies[:limit]
         
     except Exception as e:
@@ -290,9 +297,11 @@ for match in matches:
     finally:
         if conn:
             try:
+                # यह ensure करता है कि कोई भी खुला कनेक्शन बंद हो जाए।
                 conn.close()
             except:
                 pass
+# ... (rest of the code)
 
 def get_all_movie_qualities(movie_id):
     """Get all quality options for a movie"""
