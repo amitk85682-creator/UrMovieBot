@@ -1018,96 +1018,103 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
             # -------------------- FIX 2: QUALITY CHECK (Group Get) --------------------
-            # It's a single movie/episode. Prompt for quality.
-            qualities = get_all_movie_qualities(movie_id)
-            
-            if qualities and len(qualities) > 1:
-                # ... (send quality selection keyboard to PM)
-            else:
-                # Send the default file (single quality or fallback)
-                q_data = qualities[0] if qualities else (None, url, file_id, None)
-                quality = q_data[0] if q_data[0] else ""
-                await send_movie_file(dummy_update, context, f"{title} [{quality}]", q_data[1] or url, q_data[2] or file_id)
+# It's a single movie/episode. Prompt for quality.
+qualities = get_all_movie_qualities(movie_id)
+ 
+if qualities and len(qualities) > 1:
+    # ... (send quality selection keyboard to PM)
+    pass # <-- ADD 'pass' HERE
+else:
+    # Send the default file (single quality or fallback)
+    q_data = qualities[0] if qualities else (None, url, file_id, None)
+    quality = q_data[0] if q_data[0] else ""
+    await send_movie_file(dummy_update, context, f"{title} [{quality}]", q_data[1] or url, q_data[2] or file_id)
 
-            await query.edit_message_text("✅ Check your PM! Sent to your private chat.")
-
+await query.edit_message_text("✅ Check your PM! Sent to your private chat.")
 
         # Movie selection (from multiple search results) - select_ handler
         if query.data.startswith("select_"):
             # ... (database fetching code)
             
-            # -------------------- FIX 3: SELECT HANDLER SERIES/QUALITY CHECK --------------------
-            if is_series(title):
-                info = parse_series_info(title)
-                base_title_to_use = info['base_title'] if info['base_title'] else title
-                seasons_data = get_series_episodes(base_title_to_use)
-                
-                total_episodes = sum(len(eps) for eps in seasons_data.values())
+            # The original code, with proper indentation restored for clarity:
 
-                if total_episodes > 1 or len(seasons_data) > 1:
-                    # ... (show season selection)
-                    return
-            
-            # Single movie/episode path (or single series entry)
-            qualities = get_all_movie_qualities(movie_id)
-            
-            if qualities and len(qualities) > 1:
-                # ... (show quality selection keyboard)
-            elif qualities:
-                # One quality available
-                quality, url_q, file_id_q, _ = qualities[0]
-                await query.edit_message_text(f"⚡ Sending **{title}** [{quality}]...", parse_mode='Markdown')
-                await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
-                await query.edit_message_text("✅ Sent!")
-            else:
-                # No quality options found
-                await query.edit_message_text(f"⚡ Sending **{title}**...", parse_mode='Markdown')
-                await send_movie_file(update, context, title, url, file_id)
-                await query.edit_message_text("✅ Sent!")
+def some_handler_function(update, context): # Assuming this is all inside a function
+    # -------------------- FIX 3: SELECT HANDLER SERIES/QUALITY CHECK --------------------
+    if is_series(title):
+        info = parse_series_info(title)
+        base_title_to_use = info['base_title'] if info['base_title'] else title
+        seasons_data = get_series_episodes(base_title_to_use)
+        
+        total_episodes = sum(len(eps) for eps in seasons_data.values())
 
-
-        # Episode/movie selection - movie_ handler (for series episodes or a movie chosen from keyboard)
-        if query.data.startswith("movie_"):
-            # ... (database fetching code)
-            
-            # -------------------- FIX 4: MOVIE HANDLER QUALITY CHECK --------------------
-            qualities = get_all_movie_qualities(movie_id)
-            
-            if qualities and len(qualities) > 1:
-                await query.edit_message_text(
-                    f"🎬 **{title}**\n\n⬇️ Select Quality:",
-                    reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                    parse_mode='Markdown'
-                )
-            elif qualities:
-                # One quality available
-                quality, url_q, file_id_q, _ = qualities[0]
-                await query.edit_message_text(f"⚡ Sending **{title}** [{quality}]...", parse_mode='Markdown')
-                await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
-                await query.edit_message_text("✅ Sent!")
-            else:
-                # No quality options found
-                await query.edit_message_text(f"⚡ Sending **{title}**...", parse_mode='Markdown')
-                await send_movie_file(update, context, title, url, file_id)
-                await query.edit_message_text("✅ Sent!")
-
-            except telegram.error.Forbidden:
-                bot_username = (await context.bot.get_me()).username
-                deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🤖 Start Bot", url=deep_link),
-                    InlineKeyboardButton("🔄 Try Again", callback_data=query.data)
-                ]])
-                await query.edit_message_text(
-                    "❌ **Can't send message!**\n\n"
-                    "Please start the bot first, then try again.",
-                    reply_markup=keyboard,
-                    parse_mode='Markdown'
-                )
-            finally:
-                if conn:
-                    conn.close()
+        if total_episodes > 1 or len(seasons_data) > 1:
+            # ... (show season selection)
             return
+        
+    # Single movie/episode path (or single series entry)
+    qualities = get_all_movie_qualities(movie_id)
+    
+    if qualities and len(qualities) > 1:
+        # ... (show quality selection keyboard)
+    elif qualities:
+        # One quality available
+        quality, url_q, file_id_q, _ = qualities[0]
+        await query.edit_message_text(f"⚡ Sending **{title}** [{quality}]...", parse_mode='Markdown')
+        await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
+        await query.edit_message_text("✅ Sent!")
+    else:
+        # No quality options found
+        await query.edit_message_text(f"⚡ Sending **{title}**...", parse_mode='Markdown')
+        await send_movie_file(update, context, title, url, file_id)
+        await query.edit_message_text("✅ Sent!")
+
+
+    # Episode/movie selection - movie_ handler (for series episodes or a movie chosen from keyboard)
+    if query.data.startswith("movie_"): # <-- FIX: Ensure this is correctly indented
+        # ... (database fetching code)
+           # -------------------- FIX 4: MOVIE HANDLER QUALITY CHECK --------------------
+
+try: # <-- ADDED 'try' BLOCK START HERE
+
+    qualities = get_all_movie_qualities(movie_id)
+    
+    if qualities and len(qualities) > 1:
+        await query.edit_message_text(
+            f"🎬 **{title}**\n\n⬇️ Select Quality:",
+            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
+            parse_mode='Markdown'
+        )
+    elif qualities:
+        # One quality available
+        quality, url_q, file_id_q, _ = qualities[0]
+        await query.edit_message_text(f"⚡ Sending **{title}** [{quality}]...", parse_mode='Markdown')
+        await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
+        await query.edit_message_text("✅ Sent!")
+    else:
+        # No quality options found
+        await query.edit_message_text(f"⚡ Sending **{title}**...", parse_mode='Markdown')
+        await send_movie_file(update, context, title, url, file_id)
+        await query.edit_message_text("✅ Sent!")
+
+# <-- The exception handler now correctly follows the 'try' block
+
+except telegram.error.Forbidden:
+    bot_username = (await context.bot.get_me()).username
+    deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🤖 Start Bot", url=deep_link),
+        InlineKeyboardButton("🔄 Try Again", callback_data=query.data)
+    ]])
+    await query.edit_message_text(
+        "❌ **Can't send message!**\n\n"
+        "Please start the bot first, then try again.",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+finally:
+    if conn:
+        conn.close()
+    return
 
         # --- Movie Search Results Pagination & Selection ---
         
