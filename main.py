@@ -414,9 +414,9 @@ def get_file_options_keyboard():
 async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, movie_data: tuple, mode="auto"):
     """
     Smart Delivery System:
-    mode="auto"  -> First Search (Decides if Series or Movie)
+    mode="auto"   -> First Search (Decides if Series or Movie)
     mode="season" -> Shows Episodes for a Season
-    mode="final"  -> Sends the actual file
+    mode="final"  -> Sends the actual file with Premium Animation
     """
     try:
         movie_id, title, url, file_id = movie_data
@@ -429,30 +429,24 @@ async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, m
         # --- MODE: AUTO (First Search) ---
         if mode == "auto":
             # Database से इस नाम की सारी फाइल्स लाओ
-            all_files = get_similar_movies(base_name) # Ensure your get_similar_movies uses the regex logic I gave earlier
+            all_files = get_similar_movies(base_name)
             
-            # Check 1: क्या यह Series है? (अगर Season detected है)
+            # Check 1: क्या यह Series है?
             is_series = any(parse_info(m[1])['season'] is not None for m in all_files)
 
             if is_series:
-                # --- SERIES LOGIC: Show Seasons ---
-                # सारे Seasons इकट्ठा करें
+                # --- SERIES LOGIC ---
                 seasons_found = set()
                 for m in all_files:
                     s = parse_info(m[1])['season']
                     if s: seasons_found.add(s)
                 
-                # Sort seasons (1, 2, 3...)
                 sorted_seasons = sorted(list(seasons_found))
                 
-                if not sorted_seasons:
-                    # अगर सीजन डिटेक्ट नहीं हुए पर Series लग रही है, तो Direct files दिखाओ
-                    pass 
-                else:
+                if sorted_seasons:
                     keyboard = []
                     row = []
                     for s in sorted_seasons:
-                        # Callback: view_season | season_num | base_name_hash (using movie_id as anchor)
                         btn_text = f"💿 Season {s}"
                         row.append(InlineKeyboardButton(btn_text, callback_data=f"v_seas_{s}_{movie_id}"))
                         if len(row) == 3:
@@ -466,62 +460,116 @@ async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, m
                         reply_markup=InlineKeyboardMarkup(keyboard),
                         parse_mode='HTML'
                     )
-                    return # Stop here, wait for user input
+                    return 
 
-            # --- MOVIE LOGIC (Or if not detected as series) ---
-            # Group by Quality like before
-            # (Agar series nahi hai, to direct quality/file dikhayega)
-            # ... (Old logic continues below for Movies) ...
-            
-            # Filter matches exactly for this movie (ignoring seasons if we are here)
-            # But let's refine: If it's a movie, just show qualities
-            
+            # --- MOVIE LOGIC ---
             keyboard = []
             row = []
-            # Sirf unique buttons dikhane ke liye
             seen_qualities = set()
             
-            # Agar bahut saari files hain (Movies with same name), top 10 limit
+            # Top 15 results
             for mov in all_files[:15]:
                 m_id, m_title, _, _ = mov
                 p_info = parse_info(m_title)
-                
-                # Button Text Logic
                 q_text = p_info['quality']
                 lang = "Hin" if "hindi" in m_title.lower() else "Eng"
                 
-                # Duplicate hatane ka simple logic
-                btn_str = f"{q_text} {lang}"
-                
-                # Humesha unique button ID use karein
-                row.append(InlineKeyboardButton(f"📁 {q_text} {lang}", callback_data=f"quality_{m_id}"))
-                if len(row) == 2:
-                    keyboard.append(row)
-                    row = []
+                # Create unique button
+                btn_key = f"{q_text}_{lang}"
+                if btn_key not in seen_qualities:
+                    seen_qualities.add(btn_key)
+                    row.append(InlineKeyboardButton(f"📁 {q_text} {lang}", callback_data=f"quality_{m_id}"))
+                    if len(row) == 2:
+                        keyboard.append(row)
+                        row = []
             if row: keyboard.append(row)
 
+            # Agar koi similar quality nahi mili, to direct file bhej do (Fail safe)
+            if not keyboard:
+                 await send_movie_to_user(context, user_id, movie_data, mode="final")
+                 return
+
             msg_text = f"🎬 <b>{base_name.title()}</b>\n\n✅ <b>Movie Found!</b>\n👇 <i>Select Quality:</i>"
-            
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=msg_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='HTML'
-            )
+            await context.bot.send_message(chat_id=chat_id, text=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
             return
 
         # --- MODE: FINAL (Send File) ---
         if mode == "final":
-             # ... (Yahan wahi purana file bhejne wala code aayega) ...
-             # Copy your OLD logic for sending file here (loading_msg, caption, copy_message etc.)
-             # Main yahan short me likh raha hu, aap apna purana code yahan paste karein:
-             
-            caption_text = f"🎬 <b>{title}</b>\n\n⚡ <b>Fast Download</b>"
-            if file_id:
-                await context.bot.send_document(chat_id=chat_id, document=file_id, caption=caption_text, parse_mode='HTML', reply_markup=get_file_options_keyboard())
-            elif url:
-                await context.bot.send_message(chat_id=chat_id, text=f"🔗 Link: {url}", parse_mode='HTML')
+            # 1. Send Loading Message
+            loading_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text="⏳ <b>Processing Request...</b>\n<i>Fetching file from database...</i>",
+                parse_mode='HTML'
+            )
+            await asyncio.sleep(0.5) # Fake processing time for premium feel
+
+            # 2. Premium Caption
+            caption_text = (
+                f"🎬 <b>{title}</b>\n"
+                f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+                f"💿 <b>Quality:</b> <i>High Definition</i>\n"
+                f"🔊 <b>Language:</b> <i>Hindi / English</i>\n"
+                f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+                f"🚀 <b>Join Our Channels:</b>\n"
+                f"📢 <a href='{CHANNEL_LINK}'>Main Channel</a> | 💬 <a href='{GROUP_LINK}'>Support Group</a>\n\n"
+                f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
+            )
+
+            sent_msg = None
+
+            try:
+                # A. Try sending by File ID
+                if file_id:
+                    await context.bot.edit_message_text(chat_id=chat_id, message_id=loading_msg.message_id, text="📤 <b>Uploading File...</b>", parse_mode='HTML')
+                    sent_msg = await context.bot.send_document(
+                        chat_id=chat_id, 
+                        document=file_id, 
+                        caption=caption_text, 
+                        parse_mode='HTML', 
+                        reply_markup=get_file_options_keyboard()
+                    )
+
+                # B. Try Copying from Private Channel (Link: https://t.me/c/xxxx/xxx)
+                elif url and "t.me/c/" in url:
+                    await context.bot.edit_message_text(chat_id=chat_id, message_id=loading_msg.message_id, text="🔄 <b>Retrieving from Archive...</b>", parse_mode='HTML')
+                    parts = url.rstrip('/').split('/')
+                    # Extract Chat ID (-100xxxx) and Message ID
+                    ch_id_str = parts[-2]
+                    from_chat_id = int("-100" + ch_id_str) if not ch_id_str.startswith("-100") else int(ch_id_str)
+                    message_id = int(parts[-1])
+
+                    sent_msg = await context.bot.copy_message(
+                        chat_id=chat_id, 
+                        from_chat_id=from_chat_id, 
+                        message_id=message_id,
+                        caption=caption_text, 
+                        parse_mode='HTML', 
+                        reply_markup=get_file_options_keyboard()
+                    )
+
+                # C. Public Link or Direct URL
+                else:
+                    sent_msg = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🎬 <b>{title}</b>\n\n🔗 <b>Download Link:</b> {url}\n\n{caption_text}",
+                        parse_mode='HTML', 
+                        reply_markup=get_file_options_keyboard()
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to send file: {e}")
+                await context.bot.send_message(chat_id=chat_id, text="❌ <b>Error:</b> File removed or inaccessible.", parse_mode='HTML')
+
+            # Cleanup
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
             
+            if sent_msg:
+                # Timer Message
+                timer_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ <i>This message will self-destruct in 60 seconds.</i>", parse_mode='HTML')
+                # Auto Delete Task
+                asyncio.create_task(delete_message_after_delay(context, chat_id, sent_msg.message_id, 60))
+                asyncio.create_task(delete_message_after_delay(context, chat_id, timer_msg.message_id, 60))
+
     except Exception as e:
         logger.error(f"Send Movie Error: {e}")
 # ==================== TELEGRAM BOT HANDLERS ====================
@@ -856,15 +904,35 @@ def main():
         group_message_handler
     ))
 
-    # Private chat handler: Search movies when user sends text
+    # ... (rest of main function above) ...
+
+    # REPLACE THE OLD LAMBDA HANDLER WITH THIS:
+    
+    async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Search movies when user sends text in private chat"""
+        if not update.message or not update.message.text:
+            return
+            
+        text = update.message.text
+        movie = get_movie_from_db(text)
+        
+        if movie:
+            # Found? Start the delivery process
+            await send_movie_to_user(context, update.effective_chat.id, movie, mode="auto")
+        else:
+            # Not found? Optional: Send a "Not found" message or ignore
+            # await update.message.reply_text("❌ Movie not found in database.")
+            pass
+
+    # Add the handler
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        lambda update, context: asyncio.create_task(
-            send_movie_to_user(context, update.effective_chat.id, get_movie_from_db(update.message.text))
-            if get_movie_from_db(update.message.text) else None
-        )
+        private_message_handler
     ))
 
+    application.add_error_handler(error_handler)
+
+    # ... (flask thread code) ...
     application.add_error_handler(error_handler)
 
     # Start Flask in background thread
