@@ -959,12 +959,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Group get
 if query.data.startswith("group_get_"):
-            parts = query.data.split('_') # चार spaces का एक और स्तर
+            parts = query.data.split('_')
             movie_id = int(parts[2])
             original_user_id = int(parts[3])
             
             if query.from_user.id != original_user_id:
-# ...
                 await query.answer("This button is not for you!", show_alert=True)
                 return
             
