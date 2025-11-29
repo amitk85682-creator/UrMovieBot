@@ -13,9 +13,7 @@ from bs4 import BeautifulSoup
 import telegram
 import psycopg2
 from typing import Optional
-# Removed unused import of Flask, request, session, g as the Flask setup is commented out in main()
-# from flask import Flask, request, session, g 
-import google.generativeai as genai # Only for dependency clarity, not used in the provided code
+import google.generativeai as genai 
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import (
     Application,
@@ -957,7 +955,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Simple navigation callbacks
         if query.data in ["about_bot", "help_bot", "search_tips"]:
              # To avoid repetition, implement a generic info function
-             await send_info_message(query, query.data.split('_')[0], get_main_menu_keyboard)
+             await send_info_message(query, query.data.split('_')[0])
              return
             
         # Back to start/main menu
@@ -1330,7 +1328,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # Helper function for sending info messages
-async def send_info_message(query, info_type, back_keyboard_func):
+async def send_info_message(query, info_type):
     """Helper to send detailed info based on callback type"""
     
     caption = ""
@@ -1418,6 +1416,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # ==================== MAIN BOT ====================
 def main():
     """Run the Telegram bot"""
+    # FIX: Declare BOT_USERNAME as global at the top of the function
+    global BOT_USERNAME
+    
     logger.info("Starting Ur Movie Bot...")
     
     # Setup database (assuming you have this file)
@@ -1430,13 +1431,13 @@ def main():
     except Exception as e:
         logger.error(f"Error during database setup: {e}")
 
-    # Fix: Use BOT_USERNAME from env if it exists, otherwise get it dynamically
+    # Use BOT_USERNAME from env if it exists, otherwise get it dynamically
     if not BOT_USERNAME or BOT_USERNAME == 'your_bot':
          # Fetch the bot's username dynamically after the application is built
          application = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).build()
          try:
-             bot_info = asyncio.run(application.bot.get_me())
-             global BOT_USERNAME
+             # The global declaration is now before this line, so this is fine
+             bot_info = asyncio.run(application.bot.get_me()) 
              BOT_USERNAME = bot_info.username
              logger.info(f"Dynamically set BOT_USERNAME to @{BOT_USERNAME}")
          except Exception as e:
@@ -1480,9 +1481,4 @@ def main():
     application.run_polling()
 
 if __name__ == '__main__':
-    # Fix: Remove unused Flask setup from the main execution block
-    # flask_thread = threading.Thread(target=run_flask)
-    # flask_thread.daemon = True
-    # flask_thread.start()
-    
     main()
