@@ -281,19 +281,34 @@ def get_movie_from_db(user_query):
                 pass
 
 def get_similar_movies(base_title):
-    """Finds all movies that match the base title for multiple qualities."""
+    """Finds all movies that match the base title for multiple qualities using Regex."""
     try:
         conn = get_db_connection()
         if not conn: return []
         cur = conn.cursor()
         
-        # मूवी के नाम से एक्स्ट्रा स्पेस और साल/क्वालिटी हटाकर सर्च करते हैं
-        # ताकि "Pathan 720p" और "Pathan 1080p" दोनों मिल जाएं
-        clean_name = base_title.split(' 480')[0].split(' 720')[0].split(' 1080')[0].strip()
+        # --- FIXED CLEANING LOGIC ---
+        # 1. Convert to lower case for processing
+        clean_name = base_title.lower()
         
+        # 2. Use Regex to remove qualities like 480p, 720p, 1080p, 2k, 4k, etc.
+        # This handles: "Movie 720p", "Movie-720p", "Movie (720p)", "Movie [720p]"
+        clean_name = re.split(r'[\(\[\-\s](480|720|1080|2160|2k|4k|hd|sd|cam)p?', clean_name)[0]
+        
+        # 3. Remove common season/episode formatting if you want to group seasons together
+        # (Optional: Comment out the next line if you treat S01 and S02 as different movies)
+        # clean_name = re.split(r'[\(\[\-\s](s\d+|season)', clean_name)[0]
+
+        clean_name = clean_name.strip()
+        
+        logger.info(f"🔍 Searching similar movies for base name: '{clean_name}' (Original: {base_title})")
+        
+        # 4. Search in DB
         query = "SELECT id, title, url, file_id FROM movies WHERE title ILIKE %s ORDER BY title"
         cur.execute(query, (f"%{clean_name}%",))
         results = cur.fetchall()
+        
+        logger.info(f"✅ Found {len(results)} similar files for '{clean_name}'")
         
         cur.close()
         conn.close()
@@ -301,7 +316,6 @@ def get_similar_movies(base_title):
     except Exception as e:
         logger.error(f"Error getting similar movies: {e}")
         return []
-
 # ==================== KEYBOARD MARKUPS ====================
 def get_start_keyboard():
     """Start menu keyboard exactly as per your image"""
