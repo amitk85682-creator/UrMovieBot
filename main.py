@@ -904,35 +904,33 @@ def main():
         group_message_handler
     ))
 
-    # ... (rest of main function above) ...
-
-    # REPLACE THE OLD LAMBDA HANDLER WITH THIS:
-    
+    # ==================== NEW PRIVATE CHAT HANDLER ====================
     async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Search movies when user sends text in private chat"""
+        # अगर मैसेज खाली है तो कुछ मत करो
         if not update.message or not update.message.text:
             return
             
         text = update.message.text
+        
+        # डेटाबेस में ढूंढो
         movie = get_movie_from_db(text)
         
         if movie:
-            # Found? Start the delivery process
+            # Found? Start the delivery process (Auto Mode -> Series Check -> Quality Check)
             await send_movie_to_user(context, update.effective_chat.id, movie, mode="auto")
         else:
-            # Not found? Optional: Send a "Not found" message or ignore
-            # await update.message.reply_text("❌ Movie not found in database.")
+            # Not found? (Optional: You can send a 'Not found' msg here if you want)
             pass
 
-    # Add the handler
+    # Add the handler for Private Chats
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         private_message_handler
     ))
+    # =================================================================
 
-    application.add_error_handler(error_handler)
-
-    # ... (flask thread code) ...
+    # Register Error Handler
     application.add_error_handler(error_handler)
 
     # Start Flask in background thread
