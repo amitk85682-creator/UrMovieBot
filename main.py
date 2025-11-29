@@ -620,147 +620,137 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button callbacks with Smart Series/Season Logic"""
     query = update.callback_query
     await query.answer()
     data = query.data
-    
-    # 1. FINAL FILE DELIVERY
-    if data.startswith("quality_"):
-        movie_id = int(data.split("_")[1])
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-        movie_data = cur.fetchone()
-        conn.close()
-        
-        if movie_data:
-            await query.message.delete()
-            # Mode "final" pass karke file bhej dega
-            await send_movie_to_user(context, query.from_user.id, movie_data, mode="final")
-        else:
-            await query.message.edit_text("❌ File not found.")
+    chat_id = query.message.chat_id
 
-    # 2. SELECT SEASON -> SHOW EPISODES
-    elif data.startswith("v_seas_"):
-        # Format: v_seas_{season_num}_{anchor_movie_id}
-        parts = data.split("_")
-        season_num = int(parts[2])
-        anchor_id = int(parts[3])
-        
-        # Get base name using anchor ID
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
-        res = cur.fetchone()
-        conn.close()
-        
-        if not res:
-            await query.message.edit_text("❌ Series not found.")
-            return
+    try:
+        # --- 1. FINAL FILE DELIVERY ---
+        if data.startswith("quality_"):
+            movie_id = int(data.split("_")[1])
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+            movie_data = cur.fetchone()
+            conn.close()
             
-        base_title = parse_info(res[0])['base_name']
-        
-        # Get ALL files again
-        all_files = get_similar_movies(base_title)
-        
-        # Filter for selected Season only
-        episodes_map = {} # Key: Episode Num, Value: List of movies (qualities)
-        
-        for mov in all_files:
-            p_info = parse_info(mov[1])
-            if p_info['season'] == season_num and p_info['episode'] is not None:
-                ep_num = p_info['episode']
-                if ep_num not in episodes_map:
-                    episodes_map[ep_num] = []
-                episodes_map[ep_num].append(mov)
-        
-        # Create Episode Buttons
-        sorted_eps = sorted(episodes_map.keys())
-        keyboard = []
-        row = []
-        
-        for ep in sorted_eps:
-            # Check logic: 
-            # Agar episode ki 1 hi quality hai -> Seedha file (quality_ID)
-            # Agar multiple qualities hai -> Open Qualities (v_ep_...)
-            
-            movies_in_ep = episodes_map[ep]
-            
-            # Button Text: "Ep 1", "Ep 2"
-            btn_txt = f"Ep {ep}"
-            
-            # Callback: v_ep_{season}_{ep}_{anchor_id}
-            row.append(InlineKeyboardButton(btn_txt, callback_data=f"v_ep_{season_num}_{ep}_{anchor_id}"))
-            
-            if len(row) == 4: # 4 buttons per line
-                keyboard.append(row)
-                row = []
-        if row: keyboard.append(row)
-        
-        # Add Back Button
-        keyboard.append([InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"back_seas_{anchor_id}")])
+            if movie_data:
+                # Delete selection menu
+                try:
+                    await query.message.delete()
+                except:
+                    pass
+                # Send File (Mode: Final)
+                await send_movie_to_user(context, query.from_user.id, movie_data, mode="final")
+            else:
+                await query.message.edit_text("❌ File not found.")
 
-        await query.message.edit_text(
-            text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>Season {season_num}</b>\n👇 <i>Select Episode:</i>",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
-
-    # 3. SELECT EPISODE -> SHOW QUALITIES
-    elif data.startswith("v_ep_"):
-        # Format: v_ep_{season}_{ep}_{anchor_id}
-        parts = data.split("_")
-        season_num = int(parts[2])
-        ep_num = int(parts[3])
-        anchor_id = int(parts[4])
-        
-        # Wahi same logic dobara base name lene ke liye
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
-        res = cur.fetchone()
-        conn.close()
-        base_title = parse_info(res[0])['base_name']
-        
-        # Find specific files for this Episode
-        all_files = get_similar_movies(base_title)
-        target_files = []
-        for mov in all_files:
-            p = parse_info(mov[1])
-            if p['season'] == season_num and p['episode'] == ep_num:
-                target_files.append(mov)
-        
-        # Show Qualities for this Episode
-        keyboard = []
-        for mov in target_files:
-            mid, mtitle, _, _ = mov
-            p = parse_info(mtitle)
-            btn_txt = f"📁 {p['quality']}"
-            keyboard.append([InlineKeyboardButton(btn_txt, callback_data=f"quality_{mid}")])
+        # --- 2. SELECT SEASON -> SHOW EPISODES ---
+        elif data.startswith("v_seas_"):
+            # Format: v_seas_{season_num}_{anchor_movie_id}
+            parts = data.split("_")
+            season_num = int(parts[2])
+            anchor_id = int(parts[3])
             
-        keyboard.append([InlineKeyboardButton("🔙 Back to Episodes", callback_data=f"v_seas_{season_num}_{anchor_id}")])
-        
-        await query.message.edit_text(
-            text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>S{season_num} E{ep_num}</b>\n👇 <i>Select Quality:</i>",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
+            res = cur.fetchone()
+            conn.close()
+            
+            if not res:
+                await query.message.edit_text("❌ Series not found.")
+                return
+                
+            base_title = parse_info(res[0])['base_name']
+            
+            # Get ALL files again
+            all_files = get_similar_movies(base_title)
+            
+            # Filter for selected Season
+            episodes_map = {} 
+            for mov in all_files:
+                p_info = parse_info(mov[1])
+                if p_info['season'] == season_num and p_info['episode'] is not None:
+                    ep_num = p_info['episode']
+                    if ep_num not in episodes_map:
+                        episodes_map[ep_num] = []
+                    episodes_map[ep_num].append(mov)
+            
+            sorted_eps = sorted(episodes_map.keys())
+            keyboard = []
+            row = []
+            
+            for ep in sorted_eps:
+                btn_txt = f"Ep {ep}"
+                # Callback: v_ep_{season}_{ep}_{anchor_id}
+                row.append(InlineKeyboardButton(btn_txt, callback_data=f"v_ep_{season_num}_{ep}_{anchor_id}"))
+                if len(row) == 4: 
+                    keyboard.append(row)
+                    row = []
+            if row: keyboard.append(row)
+            
+            keyboard.append([InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"back_seas_{anchor_id}")])
 
-    # 4. BACK BUTTON (Simulate initial search)
-    elif data.startswith("back_seas_"):
-        anchor_id = int(data.split("_")[2])
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (anchor_id,))
-        movie_data = cur.fetchone()
-        conn.close()
-        
-        if movie_data:
-            await send_movie_to_user(context, query.from_user.id, movie_data, mode="auto")
-            await query.message.delete()
+            await query.message.edit_text(
+                text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>Season {season_num}</b>\n👇 <i>Select Episode:</i>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
 
-    # ... Existing help/about handlers ...
-        # --- EXISTING HANDLERS ---
+        # --- 3. SELECT EPISODE -> SHOW QUALITIES ---
+        elif data.startswith("v_ep_"):
+            # Format: v_ep_{season}_{ep}_{anchor_id}
+            parts = data.split("_")
+            season_num = int(parts[2])
+            ep_num = int(parts[3])
+            anchor_id = int(parts[4])
+            
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT title FROM movies WHERE id = %s", (anchor_id,))
+            res = cur.fetchone()
+            conn.close()
+            base_title = parse_info(res[0])['base_name']
+            
+            all_files = get_similar_movies(base_title)
+            target_files = []
+            for mov in all_files:
+                p = parse_info(mov[1])
+                if p['season'] == season_num and p['episode'] == ep_num:
+                    target_files.append(mov)
+            
+            keyboard = []
+            for mov in target_files:
+                mid, mtitle, _, _ = mov
+                p = parse_info(mtitle)
+                btn_txt = f"📁 {p['quality']}"
+                keyboard.append([InlineKeyboardButton(btn_txt, callback_data=f"quality_{mid}")])
+                
+            keyboard.append([InlineKeyboardButton("🔙 Back to Episodes", callback_data=f"v_seas_{season_num}_{anchor_id}")])
+            
+            await query.message.edit_text(
+                text=f"🎬 <b>{base_title.title()}</b>\n📌 <b>S{season_num} E{ep_num}</b>\n👇 <i>Select Quality:</i>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
+
+        # --- 4. BACK BUTTON ---
+        elif data.startswith("back_seas_"):
+            anchor_id = int(data.split("_")[2])
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id, title, url, file_id FROM movies WHERE id = %s", (anchor_id,))
+            movie_data = cur.fetchone()
+            conn.close()
+            
+            if movie_data:
+                await send_movie_to_user(context, query.from_user.id, movie_data, mode="auto")
+                await query.message.delete()
+
+        # --- HELP ---
         elif data == "help":
             help_text = """
 ❓ **Help - कैसे उपयोग करें?**
@@ -768,7 +758,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 1. ग्रुप में बस मूवी का नाम टाइप करें
 2. बॉट आपको "📂 Get File Here" बटन देगा
 3. बटन पर क्लिक करें - आप बॉट के प्राइवेट चैट में जाएंगे
-4. वहां आपको मूवी की फ़ाइल मिल जाएगी
+4. वहां आपको मूवी/सीरीज का विकल्प मिलेगा
 
 ⚠️ नोट:
 - मूवी का नाम सही लिखें
@@ -781,21 +771,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
+        # --- ABOUT ---
         elif data == "about":
-            about_text = """
+            about_text = f"""
 ℹ️ **About {BOT_NAME}**
 
 यह बॉट आपको ग्रुप में बस मूवी का नाम टाइप करने पर मूवी की फ़ाइल प्रदान करता है।
 
 ✅ फीचर्स:
+- स्मार्ट सीरीज/सीजन डिटेक्शन
 - ग्रुप से प्राइवेट चैट में फ़ाइल भेजना
 - सभी संदेश ऑटो डिलीट
-- उच्च सटीकता वाला सearch
 
 📢 चैनल: {CHANNEL_LINK}
 👥 ग्रुप: {GROUP_LINK}
 © MAINTAINED BY: FlimfyBox Team
-            """.format(BOT_NAME=BOT_NAME, CHANNEL_LINK=CHANNEL_LINK, GROUP_LINK=GROUP_LINK)
+            """
             msg = await query.edit_message_caption(
                 caption=about_text,
                 parse_mode='Markdown',
@@ -803,8 +794,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             asyncio.create_task(delete_message_after_delay(context, chat_id, msg.message_id))
 
+        # --- MEMBERSHIP CHECK ---
         elif data == "check_membership":
-            # Always return True — skip membership check (no admin required)
             msg = await query.edit_message_text(
                 text="✅ आपको चैनल और ग्रुप में जॉइन होने का स्टेटस कन्फर्म हुआ!",
                 reply_markup=None
