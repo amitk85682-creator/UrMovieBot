@@ -232,55 +232,66 @@ def get_movies_from_db(user_query, limit=10):
         cur = conn.cursor()
         logger.info(f"Searching for: '{user_query}'")
         
-        # Exact match
+        # Exact match (using ILIKE for case-insensitive LIKE)
         cur.execute(
             "SELECT id, title, url, file_id FROM movies WHERE LOWER(title) LIKE LOWER(%s) ORDER BY title LIMIT %s",
             (f'%{user_query}%', limit)
         )
         exact_matches = cur.fetchall()
         
+        results = []
+
         if exact_matches:
-            logger.info(f"Found {len(exact_matches)} exact matches")
-            results = []
+            logger.info(f"Found {len(exact_matches)} ILIKE matches")
             for match in exact_matches:
                 movie_id, title, url, file_id = match
                 results.append((movie_id, title, url, file_id, is_series(title)))
-            cur.close()
-            conn.close()
-            return results
+            
+            # If enough results are found, return them directly
+            if len(results) >= limit:
+                return results
+
+        # Fuzzy matching (only if not enough results from ILIKE)
+        if len(results) < limit:
+            cur.execute("SELECT id, title, url, file_id FROM movies")
+            all_movies = cur.fetchall()
+            
+            if not all_movies:
+                return results
+
+            # --- FIX IS HERE: Changed [movie] to [movie[1]] ---
+            movie_titles = [movie[1] for movie in all_movies]
+            movie_dict = {movie[1]: movie for movie in all_movies}
+
+            # Search only for remaining slots
+            fuzzy_limit = limit - len(results)
+            matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=fuzzy_limit)
+
+            # Keep track of IDs already added to avoid duplicates
+            existing_ids = {r[0] for r in results} 
+
+            for match in matches:
+                # process.extract returns a tuple (matched_string, score)
+                if len(match) >= 2:
+                    title = match[0]
+                    score = match[1]
+                    
+                    movie_data = movie_dict.get(title)
+                    if score >= SIMILARITY_THRESHOLD and movie_data and movie_data[0] not in existing_ids:
+                        # movie_data indices are: [0]=id, [1]=title, [2]=url, [3]=file_id
+                        results.append((
+                            movie_data[0],      # ID
+                            movie_data[1],      # Title
+                            movie_data[2],      # URL
+                            movie_data[3],      # File ID
+                            is_series(movie_data[1])
+                        ))
+                        existing_ids.add(movie_data[0])
+                        if len(results) >= limit:
+                            break
         
-        # Fuzzy matching
-        cur.execute("SELECT id, title, url, file_id FROM movies")
-        all_movies = cur.fetchall()
-        
-        if not all_movies:
-            cur.close()
-            conn.close()
-            return []
-        
-        movie_titles = [movie<!--citation:1--> for movie in all_movies]
-        movie_dict = {movie<!--citation:1-->: movie for movie in all_movies}
-        
-        matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
-        
-        filtered_movies = []
-        for match in matches:
-            if len(match) >= 2:
-                title, score = match, match<!--citation:1-->
-                if score >= 65 and title in movie_dict:
-                    movie_data = movie_dict[title]
-                    filtered_movies.append((
-                        movie_data,
-                        movie_data<!--citation:1-->,
-                        movie_data<!--citation:2-->,
-                        movie_data<!--citation:3-->,
-                        is_series(movie_data<!--citation:1-->)
-                    ))
-        
-        cur.close()
-        conn.close()
-        return filtered_movies[:limit]
-        
+        return results
+            
     except Exception as e:
         logger.error(f"Database query error: {e}")
         return []
