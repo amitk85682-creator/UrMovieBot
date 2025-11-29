@@ -1415,74 +1415,94 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
              logger.error(f"Failed to reply to message in error handler: {e}")
              pass
 
+# ==================== POST-INIT HOOK ====================
+async def post_init(application: Application):
+    """
+    Runs after the application is built but before polling starts.
+    Safe place to fetch bot details using async methods.
+    """
+    global BOT_USERNAME
+    try:
+        # Fetch bot info securely inside the running loop
+        bot_info = await application.bot.get_me()
+        BOT_USERNAME = bot_info.username
+        logger.info(f"✅ Bot initialized successfully as: @{BOT_USERNAME}")
+    except Exception as e:
+        logger.error(f"⚠️ Could not fetch bot details: {e}")
+
 # ==================== MAIN BOT ====================
 def main():
     """Run the Telegram bot"""
     logger.info("Starting Ur Movie Bot...")
     
-    # Setup database (assuming you have this file)
+    # 1. Setup database
     try:
-        from setup_database import setup_database
-        setup_database()
-        logger.info("Database setup executed (if available).")
-    except ImportError:
-        logger.warning("setup_database.py not found. Skipping database setup.")
+        # Check if setup_database.py exists and run it
+        # This is optional but good practice to ensure tables exist
+        try:
+            from setup_database import setup_database
+            setup_database()
+            logger.info("Database setup executed.")
+        except ImportError:
+            logger.warning("setup_database.py not found. Skipping auto-setup.")
     except Exception as e:
         logger.error(f"Error during database setup: {e}")
 
-    # Fix: Use BOT_USERNAME from env if it exists, otherwise get it dynamically
-    if not BOT_USERNAME or BOT_USERNAME == 'your_bot':  # <-- BOT_USERNAME is used here (read)
-         # Fetch the bot's username dynamically after the application is built
-         application = Application.builder()...
-         try:
-             bot_info = asyncio.run(application.bot.get_me())
-             global BOT_USERNAME  # <-- 'global' declared AFTER use
-             BOT_USERNAME = bot_info.username
-             logger.info(f"Dynamically set BOT_USERNAME to @{BOT_USERNAME}")
-         except Exception as e:
-             logger.error(f"Failed to fetch bot username: {e}. Using default 'your_bot'.")
-    else:
-         application = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).build()
+    # 2. Build the Application
+    # We use .post_init() to handle the username fetching logic safely
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)  # <--- This fixes the RuntimeError
+        .read_timeout(30)
+        .write_timeout(30)
+        .build()
+    )
     
-    # Conversation handler (only for private chat searches)
+    # 3. Define Conversation Handler (Private Chat)
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start, filters=filters.ChatType.PRIVATE)],
         states={
             MAIN_MENU: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
-                    main_menu # Will call search_movies indirectly
+                    main_menu
                 )
             ],
-            # SEARCHING state is effectively merged into MAIN_MENU for simplicity, 
-            # as search_movies returns MAIN_MENU and the logic is stateless per search.
+            # Note: SEARCHING state logic is currently handled within main_menu/search_movies 
+            # returning MAIN_MENU directly, creating a loop.
         },
         fallbacks=[CommandHandler('cancel', lambda u, c: u.message.reply_text("Cancelled."))],
-        # The per_message=False is fine as you are not managing complex sequential input
         per_message=False,
         per_chat=True,
     )
     
-    # Handlers
+    # 4. Add Handlers
+    # Callback Query Handler (Buttons)
     application.add_handler(CallbackQueryHandler(button_callback))
-    # Group messages use the simple handler, non-private messages are filtered out of the conv_handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, group_message_handler))
+    
+    # Group Message Handler (Silent monitoring in groups)
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, 
+        group_message_handler
+    ))
+    
+    # Add Conversation Handler
     application.add_handler(conv_handler)
     
-    # Add your existing admin command handlers here (placeholders)
-    # application.add_handler(CommandHandler("addmovie", add_movie))
-    # application.add_handler(CommandHandler("updateblog", update_blog))
-    
+    # Add Error Handler
     application.add_error_handler(error_handler)
     
-    logger.info("Bot started successfully! 🎬⚡")
-    # This is a blocking call and should be the last line
-    application.run_polling()
+    # 5. Run the Bot
+    logger.info("🚀 Bot is polling...")
+    
+    # drop_pending_updates=True is often useful in development to stop spam 
+    # from old clicks when restarting, but remove it for production if needed.
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    # Fix: Remove unused Flask setup from the main execution block
-    # flask_thread = threading.Thread(target=run_flask)
-    # flask_thread.daemon = True
-    # flask_thread.start()
-    
-    main()
+    # Ensure environment variables are loaded
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Error: TELEGRAM_BOT_TOKEN is missing!")
+    else:
+        main()
