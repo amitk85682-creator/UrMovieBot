@@ -1,37 +1,32 @@
-import logging, threading
-from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters
-from utils import db
-from config import TOKEN
-from handlers import start, search, buttons, group_listener, err
-from flask import Flask
-from config import UPDATE_SECRET
-import os
-
-logging.basicConfig(level=logging.INFO)
-
-# --- Telegram App ---
-app=Application.builder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(buttons))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND, search))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS & ~filters.COMMAND, group_listener))
-app.add_error_handler(err)
-
-# --- Flask (keep-alive + manual update) ---
-flask=Flask(__name__)
-@flask.route("/")
-def home(): return "Running!"
-@flask.route(f"/{UPDATE_SECRET}")
-def update():
-    from utils.db import get_conn
-    # call your update_movies_in_db() if needed
-    return "updated"
-
-def run_flask():
-    flask.run(host="0.0.0.0", port=int(os.getenv("PORT",8080)))
-
-if __name__=="__main__":
-    db.setup()
-    threading.Thread(target=run_flask, daemon=True).start()
-    app.run_polling()
+[notice] A new release of pip is available: 25.0.1 -> 25.3
+[notice] To update, run: pip install --upgrade pip
+==> Uploading build...
+==> Uploaded in 16.2s. Compression took 4.8s
+==> Build successful 🎉
+==> Deploying...
+==> Running 'python3 main.py'
+Traceback (most recent call last):
+  File "/opt/render/project/src/main.py", line 5, in <module>
+    from handlers import start, search, buttons, group_listener, err
+  File "/opt/render/project/src/handlers/__init__.py", line 3, in <module>
+    from .buttons import buttons
+  File "/opt/render/project/src/handlers/buttons.py", line 6, in <module>
+    from handlers.delivery import send_file, show_auto_menu
+  File "/opt/render/project/src/handlers/delivery.py", line 43, in <module>
+    async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, movie_id, title, url=None, file_id=None):
+                                          ^^^^^^^^^^^^
+NameError: name 'ContextTypes' is not defined
+==> Exited with status 1
+==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
+==> Running 'python3 main.py'
+Traceback (most recent call last):
+  File "/opt/render/project/src/main.py", line 5, in <module>
+    from handlers import start, search, buttons, group_listener, err
+  File "/opt/render/project/src/handlers/__init__.py", line 3, in <module>
+    from .buttons import buttons
+  File "/opt/render/project/src/handlers/buttons.py", line 6, in <module>
+    from handlers.delivery import send_file, show_auto_menu
+  File "/opt/render/project/src/handlers/delivery.py", line 43, in <module>
+    async def send_movie_to_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, movie_id, title, url=None, file_id=None):
+                                          ^^^^^^^^^^^^
+NameError: name 'ContextTypes' is not defined
