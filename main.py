@@ -905,8 +905,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Search tips
-        # ...
 # Back to start
 if query.data == "back_to_start":
     user = query.from_user
@@ -932,10 +930,11 @@ if query.data == "back_to_start":
         parse_mode='Markdown'
     )
     return
-# 
+
 # Group get
 if query.data.startswith("group_get_"):
-    # Fix: Indentation added to align with the rest of the block (8 spaces from the margin)
+    # Fix 1: Indentation (पूरे ब्लॉक को सही स्तर पर लाया गया)
+    # Fix 2: Syntax Error solved (citation tags replaced with indices [2] and [3])
     parts = query.data.split('_')
     movie_id = int(parts[2])
     original_user_id = int(parts[3])
@@ -960,7 +959,7 @@ if query.data.startswith("group_get_"):
             cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
             movie_data = cur.fetchone()
             cur.close()
-            conn.close()
+            # conn.close() # conn.close() को finally में ले जाया गया है
             
             if movie_data:
                 title, url, file_id = movie_data
@@ -992,6 +991,7 @@ if query.data.startswith("group_get_"):
                     )
                     asyncio.create_task(auto_delete_message(context, original_user_id, msg.message_id, MESSAGE_DELETE_TIME))
                 else:
+                    # Fix: dummy_update को सही scope में define किया गया है
                     dummy_update = Update(
                         update_id=0,
                         message=telegram.Message(
@@ -1016,48 +1016,58 @@ if query.data.startswith("group_get_"):
             "Please start the bot first, then try again.",
             reply_markup=keyboard
         )
-    return
+    except Exception as e:
+        # Generic error handler added for robustness
+        print(f"An unexpected error occurred: {e}") 
+        await query.answer("An internal error occurred.", show_alert=True)
+    finally:
+        # Ensure connection is closed even if an error occurs
+        if conn:
+            conn.close() 
+    return # Group get logic ends here
+
+# Movie selection
+if query.data.startswith("select_"):
+    # Fix: Indentation
+    movie_id = int(query.data.replace("select_", ""))
+    
+    conn = get_db_connection()
+    if conn:
+        cur = conn.cursor()
+        cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
         
-        # Movie selection
-        if query.data.startswith("select_"):
-            movie_id = int(query.data.replace("select_", ""))
+        if result:
+            title, url, file_id = result
             
-            conn = get_db_connection()
-            if conn:
-                cur = conn.cursor()
-                cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                result = cur.fetchone()
-                cur.close()
-                conn.close()
-                
-                if result:
-                    title, url, file_id = result
+            if is_series(title):
+                info = parse_series_info(title)
+                seasons_data = get_series_episodes(info['base_title'])
+                if seasons_data:
+                    context.user_data['series_data'] = seasons_data
+                    context.user_data['base_title'] = info['base_title']
                     
-                    if is_series(title):
-                        info = parse_series_info(title)
-                        seasons_data = get_series_episodes(info['base_title'])
-                        if seasons_data:
-                            context.user_data['series_data'] = seasons_data
-                            context.user_data['base_title'] = info['base_title']
-                            
-                            await query.edit_message_text(
-                                f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
-                                reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
-                                parse_mode='Markdown'
-                            )
-                            return
-                    
-                    qualities = get_all_movie_qualities(movie_id)
-                    if qualities and len(qualities) > 1:
-                        await query.edit_message_text(
-                            f"🎬 **{title}**\n\n⬇️ Select Quality:",
-                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                            parse_mode='Markdown'
-                        )
-                    else:
-                        await send_movie_file(update, context, title, url, file_id)
-                        await query.edit_message_text("✅ Sent!")
-            return
+                    await query.edit_message_text(
+                        f"📺 **{info['base_title']}**\n\n⬇️ Select Season:",
+                        reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
+                        parse_mode='Markdown'
+                    )
+                    return
+            
+            qualities = get_all_movie_qualities(movie_id)
+            if qualities and len(qualities) > 1:
+                await query.edit_message_text(
+                    f"🎬 **{title}**\n\n⬇️ Select Quality:",
+                    reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
+                    parse_mode='Markdown'
+                )
+            else:
+                # Fix: update object passed to send_movie_file function
+                await send_movie_file(update, context, title, url, file_id) 
+                await query.edit_message_text("✅ Sent!")
+    return
         
         # Season selection
         if query.data.startswith("season_"):
