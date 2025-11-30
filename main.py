@@ -215,7 +215,7 @@ def get_db_connection():
 
 # ==================== MOVIE SEARCH WITH SERIES SUPPORT ====================
 def get_movies_from_db(user_query, limit=10):
-    """Search for movies/series in database"""
+    """Search for movies in database - BOT 2 STYLE (4 Columns Only)"""
     conn = None
     try:
         conn = get_db_connection()
@@ -225,6 +225,7 @@ def get_movies_from_db(user_query, limit=10):
         cur = conn.cursor()
         logger.info(f"Searching for: '{user_query}'")
         
+        # Exact Matches (Returns 4 items: id, title, url, file_id)
         cur.execute(
             "SELECT id, title, url, file_id FROM movies WHERE LOWER(title) LIKE LOWER(%s) ORDER BY title LIMIT %s",
             (f'%{user_query}%', limit)
@@ -232,13 +233,9 @@ def get_movies_from_db(user_query, limit=10):
         exact_matches = cur.fetchall()
         
         if exact_matches:
-            logger.info(f"Found {len(exact_matches)} exact matches")
-            results = []
-            for match in exact_matches:
-                movie_id, title, url, file_id = match
-                results.append((movie_id, title, url, file_id, is_series(title)))
-            return results
+            return exact_matches
         
+        # Fuzzy Matches
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
         
@@ -255,14 +252,7 @@ def get_movies_from_db(user_query, limit=10):
             if len(match) >= 2:
                 title, score = match[0], match[1]
                 if score >= 65 and title in movie_dict:
-                    movie_data = movie_dict[title]
-                    filtered_movies.append((
-                        movie_data[0],
-                        movie_data[1],
-                        movie_data[2],
-                        movie_data[3],
-                        is_series(movie_data[1])
-                    ))
+                    filtered_movies.append(movie_dict[title])
         
         return filtered_movies[:limit]
         
@@ -271,75 +261,61 @@ def get_movies_from_db(user_query, limit=10):
         return []
     finally:
         if conn:
-            try:
-                cur.close()
-                conn.close()
-            except:
-                pass
-
+            try: cur.close(); conn.close()
+            except: pass
 def get_all_movie_qualities(movie_id):
-    """Get all quality options for a movie WITH FILE SIZE"""
-    conn = None
+    """Fetch qualities with SIZE - BOT 2 STYLE"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
     try:
-        conn = get_db_connection()
-        if not conn:
-            return []
-        
         cur = conn.cursor()
         
-        # Try to fetch file_size. If your DB doesn't have this column, remove ', file_size'
-        try:
-            cur.execute("""
-                SELECT quality, url, file_id, file_size
-                FROM movie_files
-                WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
-                ORDER BY CASE quality
-                    WHEN '4K' THEN 1
-                    WHEN '1080p' THEN 2
-                    WHEN 'HD Quality' THEN 3
-                    WHEN '720p' THEN 4
-                    WHEN '480p' THEN 5
-                    WHEN 'Standard Quality' THEN 6
-                    WHEN 'SD Quality' THEN 7
-                    ELSE 8
-                END
-            """, (movie_id,))
-            quality_results = cur.fetchall()
-        except psycopg2.Error:
-            # Fallback if file_size column missing
-            conn.rollback()
-            cur.execute("""
-                SELECT quality, url, file_id
-                FROM movie_files
-                WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
-            """, (movie_id,))
-            temp_results = cur.fetchall()
-            quality_results = [(r[0], r[1], r[2], None) for r in temp_results]
+        # 1. Fetch qualities + size
+        cur.execute("""
+            SELECT quality, url, file_id, file_size
+            FROM movie_files
+            WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
+            ORDER BY CASE quality
+                WHEN '4K' THEN 1
+                WHEN '1080p' THEN 2
+                WHEN 'HD Quality' THEN 3
+                WHEN '720p' THEN 4
+                WHEN '480p' THEN 5
+                WHEN 'Standard Quality'  THEN 6
+                WHEN 'SD Quality' THEN 7
+                ELSE 8
+            END
+        """, (movie_id,))
+        
+        raw_results = cur.fetchall()
+        
+        # Convert to list
+        quality_results = []
+        for row in raw_results:
+            # row structure: (quality, url, file_id, file_size)
+            quality_results.append(row)
 
-        # Main generic URL
+        # 2. Main generic URL
         cur.execute("SELECT url FROM movies WHERE id = %s", (movie_id,))
         main_res = cur.fetchone()
         
         final_results = []
         
-        # Add "Watch Online" button if main URL exists
         if main_res and main_res[0] and main_res[0].strip():
-            # Structure: (Quality, Url, FileId, Size)
+            # Add main stream link (Size is None)
             final_results.append(('📺 Stream / Watch Online', main_res[0].strip(), None, None))
-        
+            
         final_results.extend(quality_results)
         
+        cur.close()
         return final_results
     except Exception as e:
-        logger.error(f"Error fetching qualities: {e}")
+        logger.error(f"Error fetching movie qualities for {movie_id}: {e}")
         return []
     finally:
-        if conn:
-            try:
-                cur.close()
-                conn.close()
-            except:
-                pass
+        if conn: conn.close()
 def get_series_episodes(base_title):
     """Get all episodes for a series"""
     conn = None
@@ -417,37 +393,26 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
         return None
 
 def create_quality_selection_keyboard(movie_id, title, qualities):
-    """Create keyboard WITH SIZE display"""
-    try:
-        keyboard = []
+    """Create quality keyboard showing SIZE - BOT 2 STYLE"""
+    keyboard = []
+
+    # qualities loop contains 4 items now
+    for quality, url, file_id, file_size in qualities:
+        # Generate callback data (safe string)
+        safe_quality = quality.replace(' ', '_').replace('/', '_')
+        callback_data = f"quality_{movie_id}_{safe_quality}"
         
-        # Row structure: (quality, url, file_id, file_size)
-        for quality, url, file_id, file_size in qualities:
-            
-            # Size display logic
-            size_text = f" • {file_size}" if file_size else ""
-            
-            # Icon logic
-            if "Stream" in quality:
-                icon = "📺"
-            elif file_id:
-                icon = "📁"
-            else:
-                icon = "🔗"
-            
-            button_text = f"{icon} {quality}{size_text}"
-            
-            # Clean callback data
-            safe_quality = quality.replace(' ', '_').replace('/', '_')
-            
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{movie_id}_{safe_quality}")])
+        # Button Text Logic
+        size_text = f" - {file_size}" if file_size else ""
+        link_type = "📁" if file_id else "🔗"
         
-        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
+        button_text = f"{link_type} {quality}{size_text}"
         
-        return InlineKeyboardMarkup(keyboard)
-    except Exception as e:
-        logger.error(f"Error creating quality keyboard: {e}")
-        return None
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
+
+    return InlineKeyboardMarkup(keyboard)
 def create_season_selection_keyboard(seasons_data, base_title):
     """Create season selection keyboard for series"""
     try:
@@ -746,73 +711,55 @@ async def start(update, context):
         return MAIN_MENU
 
 async def search_movies(update, context):
-    """Search Handler - 100% Bot 2 Style (Direct File Delivery)"""
+    """Handle movie search - DIRECT SEND (BOT 2 COPY)"""
     try:
         chat_id = update.effective_chat.id
         
-        # Rate Limit
         if not await check_rate_limit(update.effective_user.id):
             msg = await update.message.reply_text("⏳ Please wait a moment.")
             schedule_delete(context, chat_id, [msg.message_id], 5)
             return MAIN_MENU
         
         user_message = update.message.text.strip()
+        
+        # Bot 2 Logic: Returns 4 items
         movies_found = get_movies_from_db(user_message, limit=10)
         
         if not movies_found:
-            if update.effective_chat.type == "private":
-                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)]])
-                msg = await update.message.reply_text(
-                    f"🚫 **No Results Found**\n\n`{user_message}` not found.",
-                    reply_markup=keyboard, parse_mode='Markdown'
-                )
-                schedule_delete(context, chat_id, [msg.message_id])
+            if update.effective_chat.type != "private": return MAIN_MENU
+            
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Search Tips", callback_data="search_tips")]])
+            msg = await update.message.reply_text(f"🚫 **No Results Found** for `{user_message}`", reply_markup=keyboard, parse_mode='Markdown')
+            schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
-        # === EXACT BOT 2 LOGIC APPLIED HERE ===
+        # Exact Single Result (Direct Quality Check)
         elif len(movies_found) == 1:
-            # Bot 1 returns 5 items. We ignore the last one (is_series_flag)
-            movie_id, title, url, file_id, _ = movies_found[0]
+            movie_id, title, url, file_id = movies_found[0]
             
-            # Directly fetch qualities
             qualities = get_all_movie_qualities(movie_id)
             
             if qualities and len(qualities) > 1:
-                # Store data and Show Buttons
+                # Store data exactly like Bot 2
                 context.user_data['selected_movie_data'] = {
                     'id': movie_id,
                     'title': title,
                     'qualities': qualities
                 }
+                selection_text = f"✅ **{title}** found!\n\n⬇️ **Please choose an option:**"
+                keyboard = create_quality_selection_keyboard(movie_id, title, qualities)
                 
-                msg = await update.message.reply_text(
-                    f"✅ **{title}** found!\n\n⬇️ **Select Quality:**",
-                    reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                    parse_mode='Markdown'
-                )
+                msg = await update.message.reply_text(selection_text, reply_markup=keyboard, parse_mode='Markdown')
                 schedule_delete(context, chat_id, [msg.message_id])
-                
             else:
-                # Single file -> Send Directly
-                final_url = url
-                final_file_id = file_id
-                display_title = title
-                
-                # Check if qualities list has data (even if 1 item) to get size/name
-                if qualities:
-                    q_name, q_url, q_file, q_size = qualities[0]
-                    final_url = q_url if q_url else url
-                    final_file_id = q_file if q_file else file_id
-                    size_str = f" [{q_size}]" if q_size else ""
-                    display_title = f"{title} [{q_name}]{size_str}"
+                # Single file direct send
+                await send_movie_file(update, context, title, url, file_id)
 
-                await send_movie_file(update, context, display_title, final_url, final_file_id)
-
+        # Multiple Results
         else:
-            # Multiple results -> List
             context.user_data['search_results'] = movies_found
             msg = await update.message.reply_text(
-                f"🔍 **Found {len(movies_found)} results**\n\nSelect one ⬇️",
+                f"🔍 **Found {len(movies_found)} results**",
                 reply_markup=create_movie_selection_keyboard(movies_found),
                 parse_mode='Markdown'
             )
@@ -1072,16 +1019,15 @@ async def button_callback(update, context):
                         await query.edit_message_text("✅ Sent!")
             return
         
-        # Quality Selection Callback (Corrected for 4-item tuple)
+        # Quality Selection Logic - Updated for Size/4-Items
         if query.data.startswith("quality_"):
             parts = query.data.split('_', 2)
             movie_id = int(parts[1])
             selected_quality_safe = parts[2]
-            
-            # Retrieve stored data
+
             movie_data = context.user_data.get('selected_movie_data')
-            
-            # Refetch if missing
+
+            # Reload data if missing
             if not movie_data or movie_data.get('id') != movie_id:
                 qualities = get_all_movie_qualities(movie_id)
                 conn = get_db_connection()
@@ -1095,25 +1041,26 @@ async def button_callback(update, context):
 
             chosen_file = None
             
-            # Find the matching quality
+            # Loop (Now handles 4 items: Quality, Url, FileId, Size)
             for q_name, q_url, q_file, q_size in movie_data['qualities']:
+                # Re-create safe name to compare
                 safe_q_name = q_name.replace(' ', '_').replace('/', '_')
                 
                 if safe_q_name == selected_quality_safe:
-                    chosen_file = {
-                        'url': q_url, 
-                        'file_id': q_file, 
-                        'quality': q_name, 
-                        'size': q_size
-                    }
+                    chosen_file = {'url': q_url, 'file_id': q_file, 'quality': q_name, 'size': q_size}
                     break
-            
+
             if chosen_file:
+                # Title formatting with size
                 size_str = f" [{chosen_file['size']}]" if chosen_file['size'] else ""
                 display_title = f"{movie_data['title']} [{chosen_file['quality']}]{size_str}"
                 
                 await query.edit_message_text(f"📤 Sending **{display_title}**...", parse_mode='Markdown')
                 await send_movie_file(update, context, display_title, chosen_file['url'], chosen_file['file_id'])
+                
+                # Cleanup user data
+                if 'selected_movie_data' in context.user_data:
+                    del context.user_data['selected_movie_data']
             else:
                 await query.edit_message_text("❌ File not found.")
             
