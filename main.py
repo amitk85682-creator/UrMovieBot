@@ -10,14 +10,12 @@ import requests
 import signal
 import sys
 import re
-
 from bs4 import BeautifulSoup
 import telegram
 import psycopg2
-from typing import Optional
-from flask import Flask, request, session, g
+from typing import Optional, Dict, List
+from flask import Flask, request
 import google.generativeai as genai
-
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import (
     Application,
@@ -33,19 +31,23 @@ from fuzzywuzzy import process, fuzz
 from urllib.parse import urlparse, urlunparse, quote
 from collections import defaultdict
 
-# ==================== FLASK APP (for Render/Web hosting) ====================
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "FilmfyBox bot is running ✅"
-
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ==================== FLASK APP FOR PORT BINDING ====================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "FilmfyBox Premium Bot is running! 🎬", 200
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 # ==================== CONVERSATION STATES ====================
 MAIN_MENU, SEARCHING, REQUESTING = range(3)
@@ -60,6 +62,7 @@ UPDATE_SECRET_CODE = os.environ.get('UPDATE_SECRET_CODE', 'default_secret_123')
 ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 GROUP_CHAT_ID = os.environ.get('GROUP_CHAT_ID')
 ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
+PORT = int(os.environ.get('PORT', 5000))
 
 # Force Join Settings
 REQUIRED_CHANNEL_ID = os.environ.get('REQUIRED_CHANNEL_ID', '@filmfybox')
@@ -75,6 +78,9 @@ MAX_REQUESTS_PER_MINUTE = int(os.environ.get('MAX_REQUESTS_PER_MINUTE', '10'))
 
 # Auto delete delay (seconds) for normal bot messages
 AUTO_DELETE_DELAY = int(os.environ.get('AUTO_DELETE_DELAY', '300'))  # default 5 minutes
+
+# Message tracking for deletion
+message_tracker: Dict[int, List[int]] = defaultdict(list)
 
 # Validate required environment variables
 if not TELEGRAM_BOT_TOKEN:
@@ -162,12 +168,7 @@ def parse_series_info(title):
         if match:
             info['season'] = int(match.group(1))
             info['episode'] = int(match.group(2))
-            info['base_title'] = re.sub(
-                r'Season\s*\d+.*Episode\s*\d+',
-                '',
-                title,
-                flags=re.IGNORECASE
-            ).strip()
+            info['base_title'] = re.sub(r'Season\s*\d+.*Episode\s*\d+', '', title, flags=re.IGNORECASE).strip()
             info['is_series'] = True
             
         return info
@@ -458,16 +459,35 @@ def create_episode_selection_keyboard(episodes, season_num):
         logger.error(f"Error creating episode keyboard: {e}")
         return None
 
-# ==================== AUTO DELETE HELPER ====================
+# ==================== IMPROVED AUTO DELETE ====================
+async def safe_delete_message(context, chat_id, message_id):
+    """Safely delete a single message"""
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        return True
+    except telegram.error.BadRequest as e:
+        if "message to delete not found" in str(e).lower():
+            logger.debug(f"Message {message_id} already deleted")
+        elif "message can't be deleted" in str(e).lower():
+            logger.debug(f"No permission to delete message {message_id}")
+        else:
+            logger.debug(f"Cannot delete message {message_id}: {e}")
+    except Exception as e:
+        logger.debug(f"Error deleting message {message_id}: {e}")
+    return False
+
 async def delete_messages_after_delay(context, chat_id, message_ids, delay=60):
-    """Delete messages after delay"""
+    """Delete messages after delay with improved error handling"""
     try:
         await asyncio.sleep(delay)
-        for msg_id in message_ids:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception as e:
-                logger.debug(f"Could not delete message {msg_id}: {e}")
+        
+        # Filter out None values and duplicates
+        valid_message_ids = list(set(filter(None, message_ids)))
+        
+        for msg_id in valid_message_ids:
+            await safe_delete_message(context, chat_id, msg_id)
+            await asyncio.sleep(0.1)  # Small delay between deletions
+            
     except Exception as e:
         logger.error(f"Error in delete_messages_after_delay: {e}")
 
@@ -476,15 +496,35 @@ def schedule_delete(context, chat_id, message_ids, delay=None):
     try:
         if not message_ids:
             return
+        
+        # Filter out None values
+        message_ids = [msg_id for msg_id in message_ids if msg_id is not None]
+        
+        if not message_ids:
+            return
+            
         if delay is None:
             delay = AUTO_DELETE_DELAY
-
-        # Use the application's event loop to schedule the task
-        asyncio.get_running_loop().create_task(
-            delete_messages_after_delay(context, chat_id, message_ids, delay)
-        )
+            
+        # Add to tracker
+        message_tracker[chat_id].extend(message_ids)
+        
+        # Create deletion task
+        asyncio.create_task(delete_messages_after_delay(context, chat_id, message_ids, delay))
+        
     except Exception as e:
         logger.error(f"Error scheduling delete: {e}")
+
+async def clear_chat_messages(context, chat_id):
+    """Clear all tracked messages for a chat"""
+    try:
+        if chat_id in message_tracker:
+            message_ids = message_tracker[chat_id]
+            for msg_id in message_ids:
+                await safe_delete_message(context, chat_id, msg_id)
+            message_tracker[chat_id] = []
+    except Exception as e:
+        logger.error(f"Error clearing chat messages: {e}")
 
 # ==================== SEND MOVIE FILE ====================
 async def send_movie_file(update, context, title, url=None, file_id=None):
@@ -531,13 +571,18 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
         sent_msg = None
         
         if file_id:
-            sent_msg = await context.bot.send_document(
-                chat_id=chat_id,
-                document=file_id,
-                caption=caption,
-                parse_mode='Markdown'
-            )
-        elif url and url.startswith("https://t.me/"):
+            try:
+                sent_msg = await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=file_id,
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            except telegram.error.BadRequest as e:
+                logger.error(f"Failed to send file_id: {e}")
+                file_id = None  # Fall back to URL
+                
+        if not file_id and url and url.startswith("https://t.me/"):
             try:
                 if "/c/" in url:
                     parts = url.rstrip('/').split('/')
@@ -557,35 +602,27 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                 )
             except Exception as e:
                 logger.error(f"Copy failed: {e}")
-                link_msg = await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🔗 **{title}**\n\n[Click here to watch]({url})",
-                    parse_mode='Markdown'
-                )
-                schedule_delete(context, chat_id, [warning_msg.message_id, link_msg.message_id], 60)
-                return
-        elif url:
+                
+        if not sent_msg and url:
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🎬 Watch Now", url=url),
                 InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
             ]])
-            link_msg = await context.bot.send_message(
+            sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=caption,
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
-            schedule_delete(context, chat_id, [warning_msg.message_id, link_msg.message_id], 60)
-            return
-        else:
-            nofile_msg = await context.bot.send_message(
+            
+        if not sent_msg:
+            sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"❌ Sorry, no file available for **{title}**",
                 parse_mode='Markdown'
             )
-            schedule_delete(context, chat_id, [warning_msg.message_id, nofile_msg.message_id], 60)
-            return
         
+        # Schedule deletion of both messages
         if sent_msg and warning_msg:
             schedule_delete(context, chat_id, [warning_msg.message_id, sent_msg.message_id], 60)
     
@@ -594,7 +631,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
         try:
             err_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ Failed to send file."
+                text="❌ Failed to send file. Please try again."
             )
             schedule_delete(context, chat_id, [err_msg.message_id])
         except:
@@ -604,6 +641,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
 async def start(update, context):
     """Start command"""
     try:
+        # Handle deep links
         if context.args and context.args[0].startswith("movie_"):
             try:
                 movie_id = int(context.args[0].split('_')[1])
@@ -658,8 +696,13 @@ async def start(update, context):
             parse_mode='Markdown',
             reply_markup=start_keyboard
         )
-        schedule_delete(context, chat_id, [banner_msg.message_id])
+        
+        # Track message for deletion
+        if banner_msg:
+            schedule_delete(context, chat_id, [banner_msg.message_id])
+            
         return MAIN_MENU
+        
     except Exception as e:
         logger.error(f"Error in start: {e}")
         return MAIN_MENU
@@ -671,13 +714,14 @@ async def search_movies(update, context):
         
         if not await check_rate_limit(update.effective_user.id):
             msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
-            schedule_delete(context, chat_id, [msg.message_id])
+            schedule_delete(context, chat_id, [msg.message_id], 5)
             return MAIN_MENU
         
         user_message = update.message.text.strip()
         movies_found = get_movies_from_db(user_message, limit=10)
         
         if not movies_found:
+            # Only reply in private chats
             if update.effective_chat.type != "private":
                 return MAIN_MENU
             
@@ -753,7 +797,7 @@ async def search_movies(update, context):
         return MAIN_MENU
 
 async def group_message_handler(update, context):
-    """Silent group handler"""
+    """Silent group handler - only responds to potential movie searches"""
     try:
         if not update.message or not update.message.text or update.message.from_user.is_bot:
             return
@@ -761,15 +805,19 @@ async def group_message_handler(update, context):
         message_text = update.message.text.strip()
         user = update.effective_user
         
+        # Ignore short messages and commands
         if len(message_text) < 4 or message_text.startswith('/'):
             return
         
+        # Search for movies
         movies_found = get_movies_from_db(message_text, limit=1)
         
         if not movies_found:
             return
         
         movie_id, title, _, _, is_series_flag = movies_found[0]
+        
+        # Check similarity score
         score = fuzz.token_sort_ratio(_normalize_title_for_match(message_text), _normalize_title_for_match(title))
         
         if score < 85:
@@ -788,7 +836,9 @@ async def group_message_handler(update, context):
             parse_mode='Markdown'
         )
         
+        # Schedule deletion after 2 minutes
         schedule_delete(context, update.effective_chat.id, [reply_msg.message_id], 120)
+        
     except Exception as e:
         logger.error(f"Group handler error: {e}")
 
@@ -797,7 +847,9 @@ async def button_callback(update, context):
     try:
         query = update.callback_query
         await query.answer()
+        chat_id = query.message.chat.id
         
+        # Check membership callback
         if query.data == "check_membership":
             is_member = await check_user_membership(context, query.from_user.id)
             if is_member:
@@ -807,11 +859,12 @@ async def button_callback(update, context):
                     "You can now search for movies and series.",
                     parse_mode='Markdown'
                 )
-                schedule_delete(context, query.message.chat.id, [query.message.message_id])
+                schedule_delete(context, chat_id, [query.message.message_id])
             else:
                 await query.answer("❌ Please join both Channel and Group first!", show_alert=True)
             return
         
+        # Help callback
         if query.data == "start_help":
             help_text = (
                 "📖 **How to Use FilmfyBox**\n\n"
@@ -826,6 +879,7 @@ async def button_callback(update, context):
             await query.edit_message_text(help_text, parse_mode='Markdown')
             return
         
+        # About callback
         if query.data == "start_about":
             about_text = (
                 "👑 **About FilmfyBox Premium**\n\n"
@@ -839,6 +893,7 @@ async def button_callback(update, context):
             await query.edit_message_text(about_text, parse_mode='Markdown')
             return
         
+        # Search tips callback
         if query.data == "search_tips":
             tips_text = (
                 "🔍 **Smart Search Tips**\n\n"
@@ -853,6 +908,7 @@ async def button_callback(update, context):
             await query.edit_message_text(tips_text, parse_mode='Markdown')
             return
         
+        # Group get callback
         if query.data.startswith("group_get_"):
             parts = query.data.split('_')
             movie_id = int(parts[2])
@@ -884,14 +940,16 @@ async def button_callback(update, context):
                         qualities = get_all_movie_qualities(movie_id)
                         
                         if qualities and len(qualities) > 1:
-                            await context.bot.send_message(
+                            pm_msg = await context.bot.send_message(
                                 chat_id=original_user_id,
                                 text=f"🎬 **{title}**\n\nSelect Quality ⬇️",
                                 reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                                 parse_mode='Markdown'
                             )
+                            # Track PM message for deletion
+                            schedule_delete(context, original_user_id, [pm_msg.message_id])
                         else:
-                            # Fake a minimal update for private chat sending
+                            # Create dummy update for PM
                             dummy_update = Update(
                                 update_id=0,
                                 message=telegram.Message(
@@ -904,6 +962,7 @@ async def button_callback(update, context):
                             await send_movie_file(dummy_update, context, title, url, file_id)
                         
                         await query.edit_message_text("✅ Check your PM!")
+                        
             except telegram.error.Forbidden:
                 bot_username = (await context.bot.get_me()).username
                 deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
@@ -916,6 +975,7 @@ async def button_callback(update, context):
                 )
             return
         
+        # Movie selection callbacks
         if query.data.startswith("select_"):
             movie_id = int(query.data.replace("select_", ""))
             
@@ -942,6 +1002,7 @@ async def button_callback(update, context):
                         await query.edit_message_text("✅ Sent!")
             return
         
+        # Season selection callbacks
         if query.data.startswith("season_"):
             parts = query.data.split('_', 2)
             season_num = int(parts[1])
@@ -957,6 +1018,7 @@ async def button_callback(update, context):
                 )
             return
         
+        # Episode/Movie selection callbacks
         if query.data.startswith("movie_"):
             movie_id = int(query.data.replace("movie_", ""))
             
@@ -983,6 +1045,7 @@ async def button_callback(update, context):
                         await query.edit_message_text("✅ Sent!")
             return
         
+        # Quality selection callbacks
         if query.data.startswith("quality_"):
             parts = query.data.split('_', 2)
             movie_id = int(parts[1])
@@ -1016,6 +1079,7 @@ async def button_callback(update, context):
                     await query.edit_message_text("❌ File not found!")
             return
         
+        # Pagination callbacks
         if query.data.startswith("page_"):
             page = int(query.data.replace("page_", ""))
             movies = context.user_data.get('search_results', [])
@@ -1027,6 +1091,7 @@ async def button_callback(update, context):
                 )
             return
         
+        # Cancel callback
         if query.data == "cancel_selection":
             await query.edit_message_text("❌ Cancelled.")
             return
@@ -1052,36 +1117,53 @@ async def error_handler(update, context):
         logger.error(f"Exception: {context.error}", exc_info=context.error)
         if isinstance(update, Update) and update.effective_message:
             try:
+                chat_id = update.effective_chat.id
                 msg = await update.effective_message.reply_text("❌ Something went wrong. Please try again.")
-                schedule_delete(context, update.effective_chat.id, [msg.message_id])
+                schedule_delete(context, chat_id, [msg.message_id])
             except:
                 pass
     except:
         pass
 
-# ==================== MAIN BOT ====================
-
-def run_flask():
-    """Run Flask server for hosting platforms that require a port (e.g. Render Web Service)"""
+# ==================== ADMIN COMMANDS ====================
+async def clear_all(update, context):
+    """Admin command to clear all messages in a chat"""
     try:
-        port = int(os.environ.get("PORT", "10000"))
-        logger.info(f"Starting Flask server on port {port} for health checks / port binding...")
-        app.run(host="0.0.0.0", port=port)
+        user_id = update.effective_user.id
+        
+        # Check if user is admin
+        if user_id != ADMIN_USER_ID:
+            return
+            
+        chat_id = update.effective_chat.id
+        await clear_chat_messages(context, chat_id)
+        
+        msg = await update.message.reply_text("✅ All tracked messages cleared!")
+        schedule_delete(context, chat_id, [msg.message_id], 5)
+        
     except Exception as e:
-        logger.error(f"Failed to start Flask server: {e}")
+        logger.error(f"Error in clear_all: {e}")
 
+# ==================== RUN FLASK IN THREAD ====================
+def run_flask():
+    """Run Flask app in a separate thread"""
+    app.run(host='0.0.0.0', port=PORT)
+
+# ==================== MAIN BOT ====================
 def main():
-    """Run the Telegram bot"""
+    """Run the Telegram bot with Flask web server"""
     try:
         logger.info("Starting FilmfyBox Premium Bot...")
-
-        # If you are deploying as a Web Service on Render / Railway etc.,
-        # this keeps a HTTP port open so the platform doesn't kill the container.
+        
+        # Start Flask in a separate thread
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
+        logger.info(f"Flask server started on port {PORT}")
         
+        # Create bot application
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).build()
         
+        # Conversation handler for private chats
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start, filters=filters.ChatType.PRIVATE)],
             states={
@@ -1093,13 +1175,16 @@ def main():
             per_chat=True,
         )
         
+        # Add handlers
         application.add_handler(CallbackQueryHandler(button_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, group_message_handler))
+        application.add_handler(CommandHandler('clearall', clear_all))  # Admin command
         application.add_handler(conv_handler)
         application.add_error_handler(error_handler)
         
         logger.info("Bot started successfully! 🎬")
-        application.run_polling()
+        application.run_polling(drop_pending_updates=True)
+        
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         sys.exit(1)
