@@ -512,7 +512,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 # ==================== KEYBOARD CREATION ====================
 def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
-    """Create Netflix-style movie selection keyboard"""
+    """Create movie selection keyboard - FIXED FOR 4 ITEMS (Bot 2 Style)"""
     try:
         start_idx = page * movies_per_page
         end_idx = start_idx + movies_per_page
@@ -521,9 +521,19 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
         keyboard = []
         
         for movie in current_movies:
-            movie_id, title, url, file_id, is_series_flag = movie
-            emoji = "📺" if is_series_flag else "🎬"
-            button_text = f"{emoji} {title}" if len(title) <= 35 else f"{emoji} {title[:32]}..."
+            # --- FIX IS HERE ---
+            # Pehle ye 5 values expect kar raha tha (is_series_flag ke sath).
+            # Ab hum isse sirf 4 values unpack karne ko bolenge.
+            movie_id, title, url, file_id = movie 
+            
+            # Simple emoji use karenge kyunki series check hata diya hai
+            button_text = f"🎬 {title}" 
+            
+            # Title jyada lamba ho to trim kar do
+            if len(button_text) > 40:
+                button_text = button_text[:37] + "..."
+                
+            # Note: Callback data 'select_' rakha hai taki aapka existing button_callback code kaam kare
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"select_{movie_id}")])
         
         nav_buttons = []
