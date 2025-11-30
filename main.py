@@ -287,26 +287,36 @@ def get_all_movie_qualities(movie_id):
         
         cur = conn.cursor()
         
-        # Bot 1 Database usually has file_size column. We fetch it here.
-        cur.execute("""
-            SELECT quality, url, file_id, file_size
-            FROM movie_files
-            WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
-            ORDER BY CASE quality
-                WHEN '4K' THEN 1
-                WHEN '1080p' THEN 2
-                WHEN 'HD Quality' THEN 3
-                WHEN '720p' THEN 4
-                WHEN '480p' THEN 5
-                WHEN 'Standard Quality' THEN 6
-                WHEN 'SD Quality' THEN 7
-                ELSE 8
-            END
-        """, (movie_id,))
-        
-        quality_results = cur.fetchall()
-        
-        # Main generic URL from movies table
+        # Try to fetch file_size. If your DB doesn't have this column, remove ', file_size'
+        try:
+            cur.execute("""
+                SELECT quality, url, file_id, file_size
+                FROM movie_files
+                WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
+                ORDER BY CASE quality
+                    WHEN '4K' THEN 1
+                    WHEN '1080p' THEN 2
+                    WHEN 'HD Quality' THEN 3
+                    WHEN '720p' THEN 4
+                    WHEN '480p' THEN 5
+                    WHEN 'Standard Quality' THEN 6
+                    WHEN 'SD Quality' THEN 7
+                    ELSE 8
+                END
+            """, (movie_id,))
+            quality_results = cur.fetchall()
+        except psycopg2.Error:
+            # Fallback if file_size column missing
+            conn.rollback()
+            cur.execute("""
+                SELECT quality, url, file_id
+                FROM movie_files
+                WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
+            """, (movie_id,))
+            temp_results = cur.fetchall()
+            quality_results = [(r[0], r[1], r[2], None) for r in temp_results]
+
+        # Main generic URL
         cur.execute("SELECT url FROM movies WHERE id = %s", (movie_id,))
         main_res = cur.fetchone()
         
@@ -317,10 +327,7 @@ def get_all_movie_qualities(movie_id):
             # Structure: (Quality, Url, FileId, Size)
             final_results.append(('📺 Stream / Watch Online', main_res[0].strip(), None, None))
         
-        # Add other qualities
-        for row in quality_results:
-            # row is (quality, url, file_id, file_size)
-            final_results.append(row)
+        final_results.extend(quality_results)
         
         return final_results
     except Exception as e:
@@ -410,26 +417,29 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
         return None
 
 def create_quality_selection_keyboard(movie_id, title, qualities):
-    """Create Netflix-style quality selection keyboard WITH SIZE"""
+    """Create keyboard WITH SIZE display"""
     try:
         keyboard = []
         
+        # Row structure: (quality, url, file_id, file_size)
         for quality, url, file_id, file_size in qualities:
-            # Logic to show size if available
+            
+            # Size display logic
             size_text = f" • {file_size}" if file_size else ""
             
             # Icon logic
             if "Stream" in quality:
-                link_type = "🔗" 
+                icon = "📺"
             elif file_id:
-                link_type = "📁"
+                icon = "📁"
             else:
-                link_type = "🔗"
+                icon = "🔗"
             
-            button_text = f"{link_type} {quality}{size_text}"
+            button_text = f"{icon} {quality}{size_text}"
             
-            # Safe quality string for callback
+            # Clean callback data
             safe_quality = quality.replace(' ', '_').replace('/', '_')
+            
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{movie_id}_{safe_quality}")])
         
         keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
@@ -736,47 +746,39 @@ async def start(update, context):
         return MAIN_MENU
 
 async def search_movies(update, context):
-    """Search Handler - Modified to match Bot 2 Behavior (Direct Delivery)"""
+    """Search Handler - 100% Bot 2 Style (Direct File Delivery)"""
     try:
         chat_id = update.effective_chat.id
         
+        # Rate Limit
         if not await check_rate_limit(update.effective_user.id):
-            msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
+            msg = await update.message.reply_text("⏳ Please wait a moment.")
             schedule_delete(context, chat_id, [msg.message_id], 5)
             return MAIN_MENU
         
         user_message = update.message.text.strip()
         movies_found = get_movies_from_db(user_message, limit=10)
         
-        # 1. No Results
         if not movies_found:
-            if update.effective_chat.type != "private":
-                return MAIN_MENU
-            
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔍 Search Tips", callback_data="search_tips"),
-                InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
-            ]])
-            
-            msg = await update.message.reply_text(
-                f"🚫 **No Results Found**\n\n`{user_message}` is not in our collection yet.",
-                reply_markup=keyboard,
-                parse_mode='Markdown'
-            )
-            schedule_delete(context, chat_id, [msg.message_id])
+            if update.effective_chat.type == "private":
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)]])
+                msg = await update.message.reply_text(
+                    f"🚫 **No Results Found**\n\n`{user_message}` not found.",
+                    reply_markup=keyboard, parse_mode='Markdown'
+                )
+                schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
-        # 2. Single Result (DIRECT LOGIC - NO FOLDERS)
+        # === EXACT BOT 2 LOGIC APPLIED HERE ===
         elif len(movies_found) == 1:
-            # Bot 1 DB returns 5 items. The last one is 'is_series'.
-            # We IGNORE 'is_series' to prevent folder opening.
+            # Bot 1 returns 5 items. We ignore the last one (is_series_flag)
             movie_id, title, url, file_id, _ = movies_found[0]
             
-            # Check for multiple qualities
+            # Directly fetch qualities
             qualities = get_all_movie_qualities(movie_id)
             
             if qualities and len(qualities) > 1:
-                # Store data for callback
+                # Store data and Show Buttons
                 context.user_data['selected_movie_data'] = {
                     'id': movie_id,
                     'title': title,
@@ -784,30 +786,30 @@ async def search_movies(update, context):
                 }
                 
                 msg = await update.message.reply_text(
-                    f"✅ **{title}** found!\n\n⬇️ **Please choose quality:**",
+                    f"✅ **{title}** found!\n\n⬇️ **Select Quality:**",
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                     parse_mode='Markdown'
                 )
                 schedule_delete(context, chat_id, [msg.message_id])
                 
             else:
-                # Single quality/file -> Send Directly
+                # Single file -> Send Directly
                 final_url = url
                 final_file_id = file_id
                 display_title = title
                 
-                # If qualities list exists (size info might be there), use it
+                # Check if qualities list has data (even if 1 item) to get size/name
                 if qualities:
                     q_name, q_url, q_file, q_size = qualities[0]
                     final_url = q_url if q_url else url
                     final_file_id = q_file if q_file else file_id
-                    size_info = f"[{q_size}]" if q_size else ""
-                    display_title = f"{title} {size_info}"
+                    size_str = f" [{q_size}]" if q_size else ""
+                    display_title = f"{title} [{q_name}]{size_str}"
 
                 await send_movie_file(update, context, display_title, final_url, final_file_id)
 
-        # 3. Multiple Results (List)
         else:
+            # Multiple results -> List
             context.user_data['search_results'] = movies_found
             msg = await update.message.reply_text(
                 f"🔍 **Found {len(movies_found)} results**\n\nSelect one ⬇️",
@@ -820,12 +822,6 @@ async def search_movies(update, context):
     
     except Exception as e:
         logger.error(f"Error in search: {e}")
-        if update.effective_chat.type == "private":
-            try:
-                msg = await update.message.reply_text("❌ Something went wrong.")
-                schedule_delete(context, chat_id, [msg.message_id])
-            except:
-                pass
         return MAIN_MENU
 async def group_message_handler(update, context):
     """Silent group handler - only responds to potential movie searches"""
@@ -1076,19 +1072,16 @@ async def button_callback(update, context):
                         await query.edit_message_text("✅ Sent!")
             return
         
-        # Quality selection callback inside button_callback function
+        # Quality Selection Callback (Corrected for 4-item tuple)
         if query.data.startswith("quality_"):
-            parts = query.data.split('_', 2) # Limit split to handle spaces in quality name
+            parts = query.data.split('_', 2)
             movie_id = int(parts[1])
-            # Reconstruct quality name (replace underscores back to spaces if needed, generic matching)
-            # Better approach: Loop and find match based on loose comparison or index if possible.
-            # But let's stick to the selected_movie_data context.
+            selected_quality_safe = parts[2]
             
-            selected_quality_safe = parts[2] # This is safe string (e.g. 720p)
-
+            # Retrieve stored data
             movie_data = context.user_data.get('selected_movie_data')
-
-            # Reload data if missing (e.g. after restart)
+            
+            # Refetch if missing
             if not movie_data or movie_data.get('id') != movie_id:
                 qualities = get_all_movie_qualities(movie_id)
                 conn = get_db_connection()
@@ -1102,12 +1095,17 @@ async def button_callback(update, context):
 
             chosen_file = None
             
-            # Loop through qualities to find the match
+            # Find the matching quality
             for q_name, q_url, q_file, q_size in movie_data['qualities']:
                 safe_q_name = q_name.replace(' ', '_').replace('/', '_')
                 
                 if safe_q_name == selected_quality_safe:
-                    chosen_file = {'url': q_url, 'file_id': q_file, 'quality': q_name, 'size': q_size}
+                    chosen_file = {
+                        'url': q_url, 
+                        'file_id': q_file, 
+                        'quality': q_name, 
+                        'size': q_size
+                    }
                     break
             
             if chosen_file:
@@ -1117,7 +1115,7 @@ async def button_callback(update, context):
                 await query.edit_message_text(f"📤 Sending **{display_title}**...", parse_mode='Markdown')
                 await send_movie_file(update, context, display_title, chosen_file['url'], chosen_file['file_id'])
             else:
-                await query.edit_message_text("❌ File not found or expired.")
+                await query.edit_message_text("❌ File not found.")
             
             return
         
