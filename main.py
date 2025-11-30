@@ -150,24 +150,17 @@ def parse_series_info(title):
             'is_series': False
         }
         
-        match = re.search(r'S(\d+)\s*E(\d+)', title, re.IGNORECASE)
+        match = re.search(r'S(\d+)\s*E\d+', title, re.IGNORECASE)
         if match:
             info['season'] = int(match.group(1))
-            info['episode'] = int(match.group(2))
             info['base_title'] = title[:match.start()].strip()
             info['is_series'] = True
             return info
         
-        match = re.search(r'Season\s*(\d+).*Episode\s*(\d+)', title, re.IGNORECASE)
+        match = re.search(r'Season\s*(\d+)', title, re.IGNORECASE)
         if match:
             info['season'] = int(match.group(1))
-            info['episode'] = int(match.group(2))
-            info['base_title'] = re.sub(
-                r'Season\s*\d+.*Episode\s*\d+',
-                '',
-                title,
-                flags=re.IGNORECASE
-            ).strip()
+            info['base_title'] = re.sub(r'Season\s*\d+.*', '', title, flags=re.IGNORECASE).strip()
             info['is_series'] = True
             
         return info
@@ -232,11 +225,7 @@ def get_movies_from_db(user_query, limit=10):
         
         if exact_matches:
             logger.info(f"Found {len(exact_matches)} exact matches")
-            results = []
-            for match in exact_matches:
-                movie_id, title, url, file_id = match
-                results.append((movie_id, title, url, file_id, is_series(title)))
-            return results
+            return exact_matches
         
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
@@ -254,14 +243,7 @@ def get_movies_from_db(user_query, limit=10):
             if len(match) >= 2:
                 title, score = match[0], match[1]
                 if score >= 65 and title in movie_dict:
-                    movie_data = movie_dict[title]
-                    filtered_movies.append((
-                        movie_data[0],
-                        movie_data[1],
-                        movie_data[2],
-                        movie_data[3],
-                        is_series(movie_data[1])
-                    ))
+                    filtered_movies.append(movie_dict[title])
         
         return filtered_movies[:limit]
         
@@ -277,48 +259,88 @@ def get_movies_from_db(user_query, limit=10):
                 pass
 
 def get_all_movie_qualities(movie_id):
-    """Get all quality options for a movie"""
-    conn = None
+    """Fetch all available qualities and their SIZES for a given movie ID"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
     try:
-        conn = get_db_connection()
-        if not conn:
-            return []
-        
         cur = conn.cursor()
-        
-        # Get qualities from movie_files table
+        # Update: Added file_size to the SELECT statement
         cur.execute("""
             SELECT quality, url, file_id, file_size
             FROM movie_files
             WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
             ORDER BY CASE quality
                 WHEN '4K' THEN 1
-                WHEN '1080p' THEN 2
-                WHEN 'HD Quality' THEN 3
-                WHEN '720p' THEN 4
-                WHEN '480p' THEN 5
-                WHEN 'Standard Quality' THEN 6
-                WHEN 'SD Quality' THEN 7
-                ELSE 8
-            END
+                WHEN 'HD Quality' THEN 2
+                WHEN 'Standard Quality' THEN 3
+                WHEN 'Low Quality' THEN 4
+                ELSE 5
+            END DESC
         """, (movie_id,))
-        
-        quality_results = cur.fetchall()
-        
-        # REMOVED the main movie URL check since it's empty in your case
-        
+        results = cur.fetchall()
         cur.close()
-        return quality_results
-        
+        return results
     except Exception as e:
-        logger.error(f"Error fetching qualities: {e}")
+        logger.error(f"Error fetching movie qualities for {movie_id}: {e}")
         return []
     finally:
         if conn:
-            try:
-                conn.close()
-            except:
-                pass
+            conn.close()
+
+def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
+    """Create inline keyboard with movie selection buttons"""
+    start_idx = page * movies_per_page
+    end_idx = start_idx + movies_per_page
+    current_movies = movies[start_idx:end_idx]
+
+    keyboard = []
+
+    for movie in current_movies:
+        movie_id, title, url, file_id = movie
+        button_text = title if len(title) <= 40 else title[:37] + "..."
+        keyboard.append([InlineKeyboardButton(
+            f"🎬 {button_text}",
+            callback_data=f"movie_{movie_id}"
+        )])
+
+    nav_buttons = []
+    total_pages = (len(movies) + movies_per_page - 1) // movies_per_page
+
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"page_{page-1}"))
+
+    if end_idx < len(movies):
+        nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"page_{page+1}"))
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
+
+    return InlineKeyboardMarkup(keyboard)
+
+def create_quality_selection_keyboard(movie_id, title, qualities):
+    """Create inline keyboard with quality selection buttons showing SIZE"""
+    keyboard = []
+
+    # Note: qualities tuple ab 4 items ka hai -> (quality, url, file_id, file_size)
+    for quality, url, file_id, file_size in qualities:
+        callback_data = f"quality_{movie_id}_{quality}"
+        
+        # Agar size available hai to dikhayein, nahi to sirf Quality dikhayein
+        size_text = f" - {file_size}" if file_size else ""
+        link_type = "File" if file_id else "Link"
+        
+        # Button text example: "🎬 720p - 1.4GB (Link)"
+        button_text = f"🎬 {quality}{size_text} ({link_type})"
+        
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+    keyboard.append([InlineKeyboardButton("❌ Cancel Selection", callback_data="cancel_selection")])
+
+    return InlineKeyboardMarkup(keyboard)
 
 def get_series_episodes(base_title):
     """Get all episodes for a series"""
@@ -346,7 +368,7 @@ def get_series_episodes(base_title):
                     seasons[info['season']].append({
                         'id': ep_id,
                         'title': title,
-                        'episode': info['episode'] or 0
+                        'episode': info.get('episode', 0)
                     })
         
         for season in seasons:
@@ -363,58 +385,6 @@ def get_series_episodes(base_title):
                 conn.close()
             except:
                 pass
-
-# ==================== KEYBOARD CREATION ====================
-def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
-    """Create Netflix-style movie selection keyboard"""
-    try:
-        start_idx = page * movies_per_page
-        end_idx = start_idx + movies_per_page
-        current_movies = movies[start_idx:end_idx]
-        
-        keyboard = []
-        
-        for movie in current_movies:
-            movie_id, title, url, file_id, is_series_flag = movie
-            emoji = "📺" if is_series_flag else "🎬"
-            button_text = f"{emoji} {title}" if len(title) <= 35 else f"{emoji} {title[:32]}..."
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"select_{movie_id}")])
-        
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"page_{page-1}"))
-        if end_idx < len(movies):
-            nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"page_{page+1}"))
-        
-        if nav_buttons:
-            keyboard.append(nav_buttons)
-        
-        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
-        
-        return InlineKeyboardMarkup(keyboard)
-    except Exception as e:
-        logger.error(f"Error creating movie selection keyboard: {e}")
-        return None
-
-def create_quality_selection_keyboard(movie_id, title, qualities):
-    """Create Netflix-style quality selection keyboard"""
-    try:
-        keyboard = []
-        
-        for quality, url, file_id, file_size in qualities:
-            size_text = f" • {file_size}" if file_size else ""
-            link_type = "📱" if file_id else "🔗"
-            button_text = f"{link_type} {quality}{size_text}"
-            
-            safe_quality = quality.replace(' ', '_').replace('/', '_')
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{movie_id}_{safe_quality}")])
-        
-        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
-        
-        return InlineKeyboardMarkup(keyboard)
-    except Exception as e:
-        logger.error(f"Error creating quality keyboard: {e}")
-        return None
 
 def create_season_selection_keyboard(seasons_data, base_title):
     """Create season selection keyboard for series"""
@@ -478,6 +448,138 @@ def schedule_delete(context, chat_id, message_ids, delay=None):
         )
     except Exception as e:
         logger.error(f"Error scheduling delete: {e}")
+
+# ==================== HELPER FUNCTION (EXACT COPY FROM 2ND BOT) ====================
+async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE, movie_id: int, title: str, url: Optional[str] = None, file_id: Optional[str] = None):
+    """Sends the movie file/link to the user with a warning and caption"""
+    chat_id = update.effective_chat.id
+
+    if not url and not file_id:
+        qualities = get_all_movie_qualities(movie_id)
+        if qualities:
+            context.user_data['selected_movie_data'] = {
+                'id': movie_id,
+                'title': title,
+                'qualities': qualities
+            }
+            selection_text = f"✅ We found **{title}** in multiple qualities.\n\n⬇️ **Please choose the file quality:**"
+            keyboard = create_quality_selection_keyboard(movie_id, title, qualities)
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=selection_text,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+            schedule_delete(context, chat_id, [msg.message_id], 300)
+            return
+
+    try:
+        warning_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ ❌👉This file automatically❗️deletes after 1 minute❗️so please forward it to another chat👈❌",
+            parse_mode='Markdown'
+        )
+
+        sent_msg = None
+        name = title
+        caption_text = (
+            f"🎬 <b>{name}</b>\n\n"
+            "🔗 <b>JOIN »</b> <a href='http://t.me/filmfybox'>FilmfyBox</a>\n\n"
+            "🔹 <b>Please drop the movie name, and I'll find it for you as soon as possible. 🎬✨👇</b>\n"
+            "🔹 <b><a href='https://t.me/Filmfybox002'>FlimfyBox Chat</a></b>"
+        )
+        join_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Join Channel", url="http://t.me/filmfybox")]])
+
+        if file_id:
+            sent_msg = await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_id,
+                caption=caption_text,
+                parse_mode='HTML',
+                reply_markup=join_keyboard
+            )
+        elif url and url.startswith("https://t.me/c/"):
+            try:
+                parts = url.rstrip('/').split('/')
+                from_chat_id = int("-100" + parts[-2])
+                message_id = int(parts[-1])
+                sent_msg = await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=from_chat_id,
+                    message_id=message_id,
+                    caption=caption_text,
+                    parse_mode='HTML',
+                    reply_markup=join_keyboard
+                )
+            except Exception as e:
+                logger.error(f"Copy private link failed {url}: {e}")
+                sent_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🎬 Found: {name}\n\n{caption_text}",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🎬 Watch Now", url=url),
+                        InlineKeyboardButton("➡️ Join Channel", url="http://t.me/filmfybox")
+                    ]]),
+                    parse_mode='HTML'
+                )
+        elif url and url.startswith("https://t.me/") and "/c/" not in url:
+            try:
+                parts = url.rstrip('/').split('/')
+                username = parts[-2].lstrip("@")
+                message_id = int(parts[-1])
+                from_chat_id = f"@{username}"
+                sent_msg = await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=from_chat_id,
+                    message_id=message_id,
+                    caption=caption_text,
+                    parse_mode='HTML',
+                    reply_markup=join_keyboard
+                )
+            except Exception as e:
+                logger.error(f"Copy public link failed {url}: {e}")
+                sent_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🎬 Found: {name}\n\n{caption_text}",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🎬 Watch Now", url=url),
+                        InlineKeyboardButton("➡️ Join Channel", url="http://t.me/filmfybox")
+                    ]]),
+                    parse_mode='HTML'
+                )
+        elif url and url.startswith("http"):
+            sent_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 Found it! '{name}' is available!\n\n{caption_text}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 Watch Now", url=url),
+                    InlineKeyboardButton("➡️ Join Channel", url="http://t.me/filmfybox")
+                ]]),
+                parse_mode='HTML'
+            )
+        else:
+            sent_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Sorry, '{name}' found but no valid file or link is attached in the database."
+            )
+
+        if sent_msg:
+            message_ids_to_delete = [warning_msg.message_id, sent_msg.message_id]
+            asyncio.create_task(
+                delete_messages_after_delay(
+                    context,
+                    chat_id,
+                    message_ids_to_delete,
+                    60
+                )
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending movie to user: {e}")
+        try:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Server failed to send file. Please report to Admin.")
+        except Exception as e2:
+            logger.error(f"Secondary send error: {e2}")
 
 # ==================== SEND MOVIE FILE ====================
 async def send_movie_file(update, context, title, url=None, file_id=None):
@@ -657,145 +759,56 @@ async def start(update, context):
         logger.error(f"Error in start: {e}")
         return MAIN_MENU
 
-async def search_movies(update, context):
-    """Search movies/series handler with smart series logic"""
+async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search for movies in the database - EXACT COPY FROM 2ND BOT WITH SERIES LOGIC"""
     try:
-        chat_id = update.effective_chat.id
-        
-        if not await check_rate_limit(update.effective_user.id):
-            msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
-            schedule_delete(context, chat_id, [msg.message_id])
+        # If called from a button click or state transition without message text
+        if not update.message or not update.message.text:
             return MAIN_MENU
-        
-        user_message = update.message.text.strip()
-        movies_found = get_movies_from_db(user_message, limit=10)
-        
-        if not movies_found:
-            if update.effective_chat.type != "private":
-                return MAIN_MENU
+
+        query = update.message.text.strip()
+
+        # Safety check: if user types a menu command, redirect to main menu
+        if query in ['🔍 Search Movies', '🙋 Request Movie', '📊 My Stats', '❓ Help']:
+             return await main_menu(update, context)
+
+        # 1. Search in DB
+        movies = get_movies_from_db(query)
+
+        # 2. If no movies found
+        if not movies:
+            # Send "Not Found" text with Request button
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🙋 Request This Movie", callback_data=f"request_{query[:20]}")]
+            ])
             
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔍 Search Tips", callback_data="search_tips"),
-                InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
-            ]])
-            
-            msg = await update.message.reply_text(
-                f"🚫 **No Results Found**\n\n"
-                f"`{user_message}` is not in our collection yet.\n\n"
-                f"💡 **Tips:**\n"
-                f"• Check spelling\n"
-                f"• Use full movie name\n"
-                f"• Add year for better results",
-                reply_markup=keyboard,
-                parse_mode='Markdown'
+            await update.message.reply_text(
+                f"😕 Sorry, I couldn't find any movie matching '{query}'.\n\n"
+                "Would you like to request it?",
+                reply_markup=keyboard
             )
-            schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
+
+        # 3. If movies found
+        context.user_data['search_results'] = movies
+        context.user_data['search_query'] = query
+
+        # Send selection keyboard (Page 0)
+        keyboard = create_movie_selection_keyboard(movies, page=0)
         
-        elif len(movies_found) == 1:
-            movie_id, title, url, file_id, is_series_flag = movies_found[0]
-            
-            # DEBUG LOGGING
-            logger.info(f"Found movie: ID={movie_id}, Title={title}, URL={url}, FileID={file_id}, IsSeries={is_series_flag}")
-            
-            # Smart Series Handling
-            if is_series_flag:
-                # Did USER search for a specific episode?
-                if is_series(user_message):
-                    # YES - User searched for specific episode
-                    qualities = get_all_movie_qualities(movie_id)
-                    
-                    # DEBUG LOGGING
-                    logger.info(f"Qualities found: {len(qualities) if qualities else 0}")
-                    if qualities:
-                        for i, q in enumerate(qualities):
-                            logger.info(f"Quality {i}: {q}")
-                    
-                    if qualities and len(qualities) > 1:
-                        # Multiple qualities available
-                        msg = await update.message.reply_text(
-                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
-                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                            parse_mode='Markdown'
-                        )
-                        schedule_delete(context, chat_id, [msg.message_id])
-                    elif qualities:
-                        # Single quality - send directly
-                        quality_name, url_final, file_id_final, _ = qualities[0]
-                        
-                        # DEBUG LOGGING
-                        logger.info(f"Single quality: name={quality_name}, url={url_final}, file_id={file_id_final}")
-                        
-                        final_url = url_final if url_final else url
-                        final_file_id = file_id_final if file_id_final else file_id
-                        
-                        logger.info(f"Sending with: URL={final_url}, FileID={final_file_id}")
-                        
-                        await send_movie_file(update, context, title, final_url, final_file_id)
-                    else:
-                        # No qualities in movie_files
-                        logger.info(f"No qualities found, using main: URL={url}, FileID={file_id}")
-                        await send_movie_file(update, context, title, url, file_id)
-                    
-                    return MAIN_MENU
-                else:
-                    # NO - User searched for base series name
-                    info = parse_series_info(title)
-                    if info['is_series'] and info['base_title']:
-                        seasons_data = get_series_episodes(info['base_title'])
-                        if seasons_data:
-                            context.user_data['series_data'] = seasons_data
-                            context.user_data['base_title'] = info['base_title']
-                            
-                            msg = await update.message.reply_text(
-                                f"📺 **{info['base_title']}**\n\nSelect Season ⬇️",
-                                reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
-                                parse_mode='Markdown'
-                            )
-                            schedule_delete(context, chat_id, [msg.message_id])
-                            return MAIN_MENU
-            
-            # Regular Movie
-            qualities = get_all_movie_qualities(movie_id)
-            
-            if qualities and len(qualities) > 1:
-                msg = await update.message.reply_text(
-                    f"🎬 **{title}**\n\nSelect Quality ⬇️",
-                    reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                    parse_mode='Markdown'
-                )
-                schedule_delete(context, chat_id, [msg.message_id])
-            elif qualities:
-                quality_name, url_final, file_id_final, _ = qualities[0]
-                
-                final_url = url_final if url_final else url
-                final_file_id = file_id_final if file_id_final else file_id
-                
-                await send_movie_file(update, context, title, final_url, final_file_id)
-            else:
-                await send_movie_file(update, context, title, url, file_id)
-        
-        else:
-            # Multiple results
-            context.user_data['search_results'] = movies_found
-            msg = await update.message.reply_text(
-                f"🔍 **Found {len(movies_found)} results**\n\nSelect one ⬇️",
-                reply_markup=create_movie_selection_keyboard(movies_found),
-                parse_mode='Markdown'
-            )
-            schedule_delete(context, chat_id, [msg.message_id])
-        
+        await update.message.reply_text(
+            f"🎬 **Found {len(movies)} results for '{query}'**\n\n"
+            "👇 Select your movie below:",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
         return MAIN_MENU
-    
+
     except Exception as e:
-        logger.error(f"Error in search: {e}")
-        if update.effective_chat.type == "private":
-            try:
-                msg = await update.message.reply_text("❌ Something went wrong. Please try again.")
-                schedule_delete(context, chat_id, [msg.message_id])
-            except:
-                pass
+        logger.error(f"Error in search_movies: {e}")
+        await update.message.reply_text("An error occurred during search.")
         return MAIN_MENU
+
 async def group_message_handler(update, context):
     """Silent group handler"""
     try:
@@ -813,13 +826,13 @@ async def group_message_handler(update, context):
         if not movies_found:
             return
         
-        movie_id, title, _, _, is_series_flag = movies_found[0]
+        movie_id, title, _, _ = movies_found[0]
         score = fuzz.token_sort_ratio(_normalize_title_for_match(message_text), _normalize_title_for_match(title))
         
         if score < 85:
             return
         
-        emoji = "📺" if is_series_flag else "🎬"
+        emoji = "📺" if is_series(title) else "🎬"
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(f"✅ Get {emoji}", callback_data=f"group_get_{movie_id}_{user.id}")
         ]])
@@ -836,13 +849,102 @@ async def group_message_handler(update, context):
     except Exception as e:
         logger.error(f"Group handler error: {e}")
 
-async def button_callback(update, context):
-    """Handle all button callbacks"""
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all button callbacks - FIXED WITH 2ND BOT LOGIC"""
     try:
         query = update.callback_query
         await query.answer()
+
+        # ==================== MOVIE SELECTION ====================
+        if query.data.startswith("movie_"):
+            movie_id = int(query.data.replace("movie_", ""))
+
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id, title FROM movies WHERE id = %s", (movie_id,))
+            movie = cur.fetchone()
+            cur.close()
+            conn.close()
+
+            if not movie:
+                await query.edit_message_text("❌ Movie not found in database.")
+                return
+
+            movie_id, title = movie
+            qualities = get_all_movie_qualities(movie_id)
+
+            if not qualities:
+                # No qualities in movie_files - use main table
+                await query.edit_message_text(f"✅ You selected: **{title}**\n\nSending movie...", parse_mode='Markdown')
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT url, file_id FROM movies WHERE id = %s", (movie_id,))
+                url, file_id = cur.fetchone() or (None, None)
+                cur.close()
+                conn.close()
+
+                await send_movie_to_user(update, context, movie_id, title, url, file_id)
+                return
+
+            context.user_data['selected_movie_data'] = {
+                'id': movie_id,
+                'title': title,
+                'qualities': qualities
+            }
+
+            selection_text = f"✅ You selected: **{title}**\n\n⬇️ **Please choose the file quality:**"
+            keyboard = create_quality_selection_keyboard(movie_id, title, qualities)
+
+            await query.edit_message_text(
+                selection_text,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
         
-        if query.data == "check_membership":
+        # ==================== QUALITY SELECTION ====================
+        elif query.data.startswith("quality_"):
+            parts = query.data.split('_')
+            movie_id = int(parts[1])
+            selected_quality = parts[2]
+
+            movie_data = context.user_data.get('selected_movie_data')
+
+            if not movie_data or movie_data.get('id') != movie_id:
+                qualities = get_all_movie_qualities(movie_id)
+                movie_data = {'id': movie_id, 'title': 'Movie', 'qualities': qualities}
+
+            if not movie_data or 'qualities' not in movie_data:
+                await query.edit_message_text("❌ Error: Could not retrieve movie data. Please search again.")
+                return
+
+            chosen_file = None
+            
+            for quality, url, file_id, file_size in movie_data['qualities']:
+                if quality == selected_quality:
+                    chosen_file = {'url': url, 'file_id': file_id}
+                    break
+
+            if not chosen_file:
+                await query.edit_message_text("❌ Error fetching the file for that quality.")
+                return
+
+            title = movie_data['title']
+            await query.edit_message_text(f"Sending **{title}**...", parse_mode='Markdown')
+
+            await send_movie_to_user(
+                update,
+                context,
+                movie_id,
+                title,
+                chosen_file['url'],
+                chosen_file['file_id']
+            )
+
+            if 'selected_movie_data' in context.user_data:
+                del context.user_data['selected_movie_data']
+        
+        # Handle check_membership
+        elif query.data == "check_membership":
             is_member = await check_user_membership(context, query.from_user.id)
             if is_member:
                 await query.edit_message_text(
@@ -856,7 +958,8 @@ async def button_callback(update, context):
                 await query.answer("❌ Please join both Channel and Group first!", show_alert=True)
             return
         
-        if query.data == "start_help":
+        # Handle help/about buttons
+        elif query.data == "start_help":
             help_text = (
                 "📖 **How to Use FilmfyBox**\n\n"
                 "1️⃣ Type any movie / series name\n"
@@ -870,7 +973,7 @@ async def button_callback(update, context):
             await query.edit_message_text(help_text, parse_mode='Markdown')
             return
         
-        if query.data == "start_about":
+        elif query.data == "start_about":
             about_text = (
                 "👑 **About FilmfyBox Premium**\n\n"
                 "🎬 Auto‑organized Movies & Series\n"
@@ -883,7 +986,7 @@ async def button_callback(update, context):
             await query.edit_message_text(about_text, parse_mode='Markdown')
             return
         
-        if query.data == "search_tips":
+        elif query.data == "search_tips":
             tips_text = (
                 "🔍 **Smart Search Tips**\n\n"
                 "✅ Good Examples:\n"
@@ -897,7 +1000,8 @@ async def button_callback(update, context):
             await query.edit_message_text(tips_text, parse_mode='Markdown')
             return
         
-        if query.data.startswith("group_get_"):
+        # Handle group_get
+        elif query.data.startswith("group_get_"):
             parts = query.data.split('_')
             movie_id = int(parts[2])
             original_user_id = int(parts[3])
@@ -960,33 +1064,8 @@ async def button_callback(update, context):
                 )
             return
         
-        if query.data.startswith("select_"):
-            movie_id = int(query.data.replace("select_", ""))
-            
-            conn = get_db_connection()
-            if conn:
-                cur = conn.cursor()
-                cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                result = cur.fetchone()
-                cur.close()
-                conn.close()
-                
-                if result:
-                    title, url, file_id = result
-                    qualities = get_all_movie_qualities(movie_id)
-                    
-                    if qualities and len(qualities) > 1:
-                        await query.edit_message_text(
-                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
-                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                            parse_mode='Markdown'
-                        )
-                    else:
-                        await send_movie_file(update, context, title, url, file_id)
-                        await query.edit_message_text("✅ Sent!")
-            return
-        
-        if query.data.startswith("season_"):
+        # Handle season selection
+        elif query.data.startswith("season_"):
             parts = query.data.split('_', 2)
             season_num = int(parts[1])
             
@@ -1001,66 +1080,8 @@ async def button_callback(update, context):
                 )
             return
         
-        if query.data.startswith("movie_"):
-            movie_id = int(query.data.replace("movie_", ""))
-            
-            conn = get_db_connection()
-            if conn:
-                cur = conn.cursor()
-                cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                result = cur.fetchone()
-                cur.close()
-                conn.close()
-                
-                if result:
-                    title, url, file_id = result
-                    qualities = get_all_movie_qualities(movie_id)
-                    
-                    if qualities and len(qualities) > 1:
-                        await query.edit_message_text(
-                            f"🎬 **{title}**\n\nSelect Quality ⬇️",
-                            reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
-                            parse_mode='Markdown'
-                        )
-                    else:
-                        await send_movie_file(update, context, title, url, file_id)
-                        await query.edit_message_text("✅ Sent!")
-            return
-        
-        if query.data.startswith("quality_"):
-            parts = query.data.split('_', 2)
-            movie_id = int(parts[1])
-            selected_quality = parts[2].replace('_', ' ')
-            
-            conn = get_db_connection()
-            if conn:
-                cur = conn.cursor()
-                cur.execute("SELECT title FROM movies WHERE id = %s", (movie_id,))
-                title_res = cur.fetchone()
-                title = title_res[0] if title_res else "Movie"
-                
-                cur.execute("""
-                    SELECT url, file_id FROM movie_files
-                    WHERE movie_id = %s AND quality = %s
-                """, (movie_id, selected_quality))
-                file_data = cur.fetchone()
-                
-                if not file_data:
-                    cur.execute("SELECT url, file_id FROM movies WHERE id = %s", (movie_id,))
-                    file_data = cur.fetchone()
-                
-                cur.close()
-                conn.close()
-                
-                if file_data:
-                    url, file_id = file_data
-                    await query.edit_message_text(f"📤 Sending **{title}**...", parse_mode='Markdown')
-                    await send_movie_file(update, context, f"{title} [{selected_quality}]", url, file_id)
-                else:
-                    await query.edit_message_text("❌ File not found!")
-            return
-        
-        if query.data.startswith("page_"):
+        # Handle pagination
+        elif query.data.startswith("page_"):
             page = int(query.data.replace("page_", ""))
             movies = context.user_data.get('search_results', [])
             if movies:
@@ -1071,7 +1092,7 @@ async def button_callback(update, context):
                 )
             return
         
-        if query.data == "cancel_selection":
+        elif query.data == "cancel_selection":
             await query.edit_message_text("❌ Cancelled.")
             return
     
