@@ -603,13 +603,14 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         ]])
 
         if file_id:
-            sent_msg = await context.bot.send_document(
-                chat_id=chat_id,
-                document=file_id,
-                caption=caption_text,
-                parse_mode='Markdown',
-                reply_markup=join_keyboard
-            )
+            sent_msg = await context.bot.copy_message(
+    chat_id=chat_id,
+    from_chat_id=from_chat_id,
+    message_id=message_id,
+    caption=caption_text,
+    parse_mode='HTML', # <--- यहाँ बदलें
+    reply_markup=join_keyboard
+)
         elif url and url.startswith("https://t.me/c/"):
             try:
                 parts = url.rstrip('/').split('/')
@@ -770,23 +771,18 @@ async def start(update, context):
         ])
 
         start_caption = (
-    f"🎬 👋 Hey {user.first_name}!"  # Yahan 'f' zaroori hai
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    f"🤖 I'm **@{bot_username}**\n\n"
-    "🔥 **Features:**\n"
-    "• 🎞 Latest Movies & Series\n"
-    "• 📺 Multiple Quality Options\n"
-    "• ⚡ Lightning Fast Search\n"
-    "• 🛡 Privacy Protected\n"
-    "• 📂 Season & Episode Support\n"
-    "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "💡 **Quick Start:**\n"
-    "Just type any movie name...\n\n"
-    "📝 **Examples:**\n"
-    "`Avatar 2`\n"
-    "`Stranger Things S04`\n"
-    "`RRR 2022`"
-)
+            "✨ **Ur Movie Bot** ✨\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🎬 Movie & Series Bot\n"
+            "🔍 Ultra‑fast search • Multi‑quality\n"
+            "🛡 Auto‑delete privacy enabled\n"
+            "📂 Seasons • Episodes • Clean UI\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "▶️ *Type any movie / series name to start...*\n"
+            "`Avengers Endgame`\n"
+            "`Stranger Things S01E01`\n"
+            "`Landman Season 1`"
+        )
 
         banner_msg = await update.message.reply_photo(
             photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh_mmbgdGwsLw5sWXVDA5DnQjQ7IzDu3CurgHNCHBiG40XGy4gt51mk0_xwoAwGvQwKi6S_7NGhPtOkdV4gUyh47kKA5LvYHcA1ozxYLE44gblBOgQ7gqsccHimH-FbeDi0TfK7nEfNIhfo7rFwYFCbIPN29sTDRz2p34ZH7pldCYst4HYwGrfkXllJF0E/s1600/Gemini_Generated_Image_4fbjgh4fbjgh4fbj.png",
