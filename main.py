@@ -286,6 +286,7 @@ def get_all_movie_qualities(movie_id):
         
         cur = conn.cursor()
         
+        # Get qualities from movie_files table
         cur.execute("""
             SELECT quality, url, file_id, file_size
             FROM movie_files
@@ -304,25 +305,17 @@ def get_all_movie_qualities(movie_id):
         
         quality_results = cur.fetchall()
         
-        cur.execute("SELECT url FROM movies WHERE id = %s", (movie_id,))
-        main_res = cur.fetchone()
+        # REMOVED the main movie URL check since it's empty in your case
         
-        final_results = []
+        cur.close()
+        return quality_results
         
-        if main_res and main_res[0] and main_res[0].strip():
-            final_results.append(('📺 Stream / Watch Online', main_res[0].strip(), None, None))
-        
-        for quality, url, file_id, file_size in quality_results:
-            final_results.append((quality, url, file_id, file_size))
-        
-        return final_results
     except Exception as e:
         logger.error(f"Error fetching qualities: {e}")
         return []
     finally:
         if conn:
             try:
-                cur.close()
                 conn.close()
             except:
                 pass
