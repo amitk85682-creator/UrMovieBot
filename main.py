@@ -722,23 +722,22 @@ async def start(update, context):
         return MAIN_MENU
 
 async def search_movies(update, context):
-    """Search movies/series handler - Fixed Specific Episode Logic"""
+    """Search movies/series handler - Modified to behave like Bot 2"""
     try:
         chat_id = update.effective_chat.id
         
-        # 1. Rate Limiting Check
+        # 1. Rate Limit Check
         if not await check_rate_limit(update.effective_user.id):
             msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
             schedule_delete(context, chat_id, [msg.message_id], 5)
             return MAIN_MENU
         
-        # 2. Get User Query & Search DB
+        # 2. Search Logic
         user_message = update.message.text.strip()
         movies_found = get_movies_from_db(user_message, limit=10)
         
-        # 3. Handle No Results
         if not movies_found:
-            # Only reply in private chats to avoid spamming groups
+            # Only reply in private chats
             if update.effective_chat.type != "private":
                 return MAIN_MENU
             
@@ -752,73 +751,49 @@ async def search_movies(update, context):
                 f"`{user_message}` is not in our collection yet.\n\n"
                 f"💡 **Tips:**\n"
                 f"• Check spelling\n"
-                f"• Use full movie name\n"
-                f"• Add year for better results",
+                f"• Use full movie name",
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
             schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
-        # 4. Handle Single Result (Crucial Fix Here)
+        # 3. Single Result Found (Bot 2 Style Logic)
         elif len(movies_found) == 1:
+            # Bot 1 returns 5 values including is_series_flag
             movie_id, title, url, file_id, is_series_flag = movies_found[0]
             
-            # --- FIX START: Specific Episode Detection ---
-            # Check agar title mein "S01E01" ya "Episode 5" jaisa kuch likha hai.
-            # Agar haan, toh isse Series Folder ki tarah mat kholo, direct file bhejo.
-            is_specific_episode = bool(re.search(r'(S\d+\s*E\d+|Episode\s*\d+|E\d+)', title, re.IGNORECASE))
+            # --- IMPORTANT CHANGE ---
+            # Humne Series Folder ka logic hata diya hai.
+            # Ab chahe wo Series ho ya Movie, bot pehle Quality check karega.
+            # Agar multiple qualities hain to Button dikhayega, nahi to File bhejega.
             
-            # Sirf tabhi Folder dikhao agar wo Series hai AUR Specific Episode NAHI hai
-            if is_series_flag and not is_specific_episode:
-                info = parse_series_info(title)
-                # Ensure base title exists so we can find other episodes
-                if info['is_series'] and info['base_title']:
-                    seasons_data = get_series_episodes(info['base_title'])
-                    
-                    # Agar seasons data mila, toh folder dikhao
-                    if seasons_data:
-                        context.user_data['series_data'] = seasons_data
-                        context.user_data['base_title'] = info['base_title']
-                        
-                        msg = await update.message.reply_text(
-                            f"📺 **{info['base_title']}**\n\nSelect Season ⬇️",
-                            reply_markup=create_season_selection_keyboard(seasons_data, info['base_title']),
-                            parse_mode='Markdown'
-                        )
-                        schedule_delete(context, chat_id, [msg.message_id])
-                        return MAIN_MENU
-            # --- FIX END ---
-
-            # Agar hum yahan phonche, matlab ye ya toh Movie hai ya Specific Episode file hai.
-            # Ab Quality check karke file bhejo.
             qualities = get_all_movie_qualities(movie_id)
             
             if qualities and len(qualities) > 1:
-                # Multiple qualities available -> Show buttons
+                # Multiple Qualities -> Show Selection Menu
                 msg = await update.message.reply_text(
                     f"🎬 **{title}**\n\nSelect Quality ⬇️",
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                     parse_mode='Markdown'
                 )
                 schedule_delete(context, chat_id, [msg.message_id])
-            
+                
             elif qualities:
-                # Single quality available -> Send directly
+                # Single Quality -> Send Direct
                 quality, url_q, file_id_q, _ = qualities[0]
-                # Use updated title with quality info
+                # Combine title and quality for display
                 display_title = f"{title} [{quality}]"
-                # Use quality URL/FileID if available, else fallback to main
                 final_url = url_q if url_q else url
                 final_file_id = file_id_q if file_id_q else file_id
                 
                 await send_movie_file(update, context, display_title, final_url, final_file_id)
-            
+                
             else:
-                # No quality variants -> Send main file
+                # No Quality info found, send main file
                 await send_movie_file(update, context, title, url, file_id)
 
-        # 5. Handle Multiple Results (List View)
+        # 4. Multiple Results Found (List View)
         else:
             context.user_data['search_results'] = movies_found
             msg = await update.message.reply_text(
@@ -832,7 +807,6 @@ async def search_movies(update, context):
     
     except Exception as e:
         logger.error(f"Error in search: {e}")
-        # Error reply only in private chat
         if update.effective_chat.type == "private":
             try:
                 msg = await update.message.reply_text("❌ Something went wrong. Please try again.")
