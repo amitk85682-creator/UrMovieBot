@@ -393,44 +393,44 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
         return None
 
 def create_quality_selection_keyboard(movie_id, title, qualities):
-    """Create quality keyboard showing SIZE - BOT 2 STYLE"""
+
+    """Create inline keyboard with quality selection buttons showing SIZE"""
+
     keyboard = []
 
-    # qualities loop contains 4 items now
+
+
+    # Note: qualities tuple ab 4 items ka hai -> (quality, url, file_id, file_size)
+
     for quality, url, file_id, file_size in qualities:
-        # Generate callback data (safe string)
-        safe_quality = quality.replace(' ', '_').replace('/', '_')
-        callback_data = f"quality_{movie_id}_{safe_quality}"
+
+        callback_data = f"quality_{movie_id}_{quality}"
+
         
-        # Button Text Logic
+
+        # Agar size available hai to dikhayein, nahi to sirf Quality dikhayein
+
         size_text = f" - {file_size}" if file_size else ""
-        link_type = "📁" if file_id else "🔗"
+
+        link_type = "File" if file_id else "Link"
+
         
-        button_text = f"{link_type} {quality}{size_text}"
+
+        # Button text example: "🎬 720p - 1.4GB (Link)"
+
+        button_text = f"🎬 {quality}{size_text} ({link_type})"
+
         
+
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
 
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
+
+
+    keyboard.append([InlineKeyboardButton("❌ Cancel Selection", callback_data="cancel_selection")])
+
+
 
     return InlineKeyboardMarkup(keyboard)
-def create_season_selection_keyboard(seasons_data, base_title):
-    """Create season selection keyboard for series"""
-    try:
-        keyboard = []
-        
-        for season_num in sorted(seasons_data.keys()):
-            episodes = seasons_data[season_num]
-            button_text = f"📂 Season {season_num} ({len(episodes)} episodes)"
-            safe_title = base_title[:30] if base_title else "series"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"season_{season_num}_{safe_title}")])
-        
-        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_selection")])
-        
-        return InlineKeyboardMarkup(keyboard)
-    except Exception as e:
-        logger.error(f"Error creating season keyboard: {e}")
-        return None
-
 def create_episode_selection_keyboard(episodes, season_num):
     """Create episode selection keyboard"""
     try:
