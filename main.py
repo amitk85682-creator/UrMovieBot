@@ -603,14 +603,13 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         ]])
 
         if file_id:
-            sent_msg = await context.bot.copy_message(
-    chat_id=chat_id,
-    from_chat_id=from_chat_id,
-    message_id=message_id,
-    caption=caption_text,
-    parse_mode='HTML', # <--- यहाँ बदलें
-    reply_markup=join_keyboard
-)
+            sent_msg = await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_id,
+                caption=caption_text,
+                parse_mode='HTML',
+                reply_markup=join_keyboard
+            )
         elif url and url.startswith("https://t.me/c/"):
             try:
                 parts = url.rstrip('/').split('/')
@@ -621,7 +620,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     from_chat_id=from_chat_id,
                     message_id=message_id,
                     caption=caption_text,
-                    parse_mode='Markdown',
+                    parse_mode='HTML',
                     reply_markup=join_keyboard
                 )
             except Exception as e:
