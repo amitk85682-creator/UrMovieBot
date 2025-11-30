@@ -528,15 +528,15 @@ async def clear_chat_messages(context, chat_id):
 
 # ==================== SEND MOVIE FILE ====================
 async def send_movie_file(update, context, title, url=None, file_id=None):
-    """Send movie file with auto-delete"""
+    """Send movie file with auto-delete and improved fallback logic"""
     try:
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
         
         if not chat_id:
-            logger.error("No chat_id found")
             return
         
+        # Check Membership
         is_member = await check_user_membership(context, user_id)
         if not is_member:
             access_msg = await context.bot.send_message(
@@ -553,6 +553,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
             schedule_delete(context, chat_id, [access_msg.message_id])
             return
         
+        # Send Warning Message
         warning_msg = await context.bot.send_message(
             chat_id=chat_id,
             text="⚠️ **File will auto-delete in 60 seconds!**\n\nPlease forward it to Saved Messages.",
@@ -570,6 +571,7 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
         
         sent_msg = None
         
+        # PRIORITY 1: Try sending by File ID
         if file_id:
             try:
                 sent_msg = await context.bot.send_document(
@@ -579,55 +581,67 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
                     parse_mode='Markdown'
                 )
             except telegram.error.BadRequest as e:
-                logger.error(f"Failed to send file_id: {e}")
-                file_id = None  # Fall back to URL
-                
-        if not file_id and url and url.startswith("https://t.me/"):
+                logger.error(f"❌ Bad File ID for {title}: {e}")
+                sent_msg = None # Reset to None to trigger fallback
+            except Exception as e:
+                logger.error(f"❌ Error sending document: {e}")
+                sent_msg = None
+
+        # PRIORITY 2: Fallback to URL (Copy Message) if File ID failed or didn't exist
+        if not sent_msg and url:
             try:
+                # Handle Private Channel Links (https://t.me/c/xxxx/xxx)
                 if "/c/" in url:
                     parts = url.rstrip('/').split('/')
-                    from_chat_id = int("-100" + parts[-2])
+                    # Extract channel ID (adds -100 prefix)
+                    channel_id_str = parts[-2]
+                    from_chat_id = int("-100" + channel_id_str) if not channel_id_str.startswith("-100") else int(channel_id_str)
+                    message_id = int(parts[-1])
+                # Handle Public Channel Links (https://t.me/username/xxx)
+                elif "t.me/" in url:
+                    parts = url.rstrip('/').split('/')
+                    from_chat_id = f"@{parts[-2]}"
                     message_id = int(parts[-1])
                 else:
-                    parts = url.rstrip('/').split('/')
-                    from_chat_id = f"@{parts[-2].lstrip('@')}"
-                    message_id = int(parts[-1])
+                    from_chat_id = None
                 
-                sent_msg = await context.bot.copy_message(
-                    chat_id=chat_id,
-                    from_chat_id=from_chat_id,
-                    message_id=message_id,
-                    caption=caption,
-                    parse_mode='Markdown'
-                )
+                if from_chat_id:
+                    sent_msg = await context.bot.copy_message(
+                        chat_id=chat_id,
+                        from_chat_id=from_chat_id,
+                        message_id=message_id,
+                        caption=caption,
+                        parse_mode='Markdown'
+                    )
             except Exception as e:
-                logger.error(f"Copy failed: {e}")
-                
+                logger.error(f"❌ Copy message failed for {title}: {e}")
+                sent_msg = None
+        
+        # PRIORITY 3: If both failed, send a Link Button
         if not sent_msg and url:
             keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🎬 Watch Now", url=url),
-                InlineKeyboardButton("📢 Join Channel", url=FILMFYBOX_CHANNEL_URL)
+                InlineKeyboardButton("🎬 Watch / Download Now", url=url)
             ]])
             sent_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text=caption,
+                text=f"🎬 **{title}**\n\n❌ Could not upload file directly.\n👇 Click below to watch:",
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
-            
+
+        # Final Error: Nothing worked
         if not sent_msg:
-            sent_msg = await context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ Sorry, no file available for **{title}**",
+                text=f"❌ **Error:** File not found for **{title}**.\n(Database ID or Link is invalid)",
                 parse_mode='Markdown'
             )
-        
-        # Schedule deletion of both messages
-        if sent_msg and warning_msg:
+        else:
+            # Schedule delete if successful
             schedule_delete(context, chat_id, [warning_msg.message_id, sent_msg.message_id], 60)
-    
+            
     except Exception as e:
-        logger.error(f"Error sending file: {e}")
+        logger.error(f"Critical error in send_movie_file: {e}")
         try:
             err_msg = await context.bot.send_message(
                 chat_id=chat_id,
@@ -708,20 +722,23 @@ async def start(update, context):
         return MAIN_MENU
 
 async def search_movies(update, context):
-    """Search movies/series handler"""
+    """Search movies/series handler - Fixed Specific Episode Logic"""
     try:
         chat_id = update.effective_chat.id
         
+        # 1. Rate Limiting Check
         if not await check_rate_limit(update.effective_user.id):
             msg = await update.message.reply_text("⏳ Please wait a moment before searching again.")
             schedule_delete(context, chat_id, [msg.message_id], 5)
             return MAIN_MENU
         
+        # 2. Get User Query & Search DB
         user_message = update.message.text.strip()
         movies_found = get_movies_from_db(user_message, limit=10)
         
+        # 3. Handle No Results
         if not movies_found:
-            # Only reply in private chats
+            # Only reply in private chats to avoid spamming groups
             if update.effective_chat.type != "private":
                 return MAIN_MENU
             
@@ -743,13 +760,23 @@ async def search_movies(update, context):
             schedule_delete(context, chat_id, [msg.message_id])
             return MAIN_MENU
         
+        # 4. Handle Single Result (Crucial Fix Here)
         elif len(movies_found) == 1:
             movie_id, title, url, file_id, is_series_flag = movies_found[0]
             
-            if is_series_flag:
+            # --- FIX START: Specific Episode Detection ---
+            # Check agar title mein "S01E01" ya "Episode 5" jaisa kuch likha hai.
+            # Agar haan, toh isse Series Folder ki tarah mat kholo, direct file bhejo.
+            is_specific_episode = bool(re.search(r'(S\d+\s*E\d+|Episode\s*\d+|E\d+)', title, re.IGNORECASE))
+            
+            # Sirf tabhi Folder dikhao agar wo Series hai AUR Specific Episode NAHI hai
+            if is_series_flag and not is_specific_episode:
                 info = parse_series_info(title)
+                # Ensure base title exists so we can find other episodes
                 if info['is_series'] and info['base_title']:
                     seasons_data = get_series_episodes(info['base_title'])
+                    
+                    # Agar seasons data mila, toh folder dikhao
                     if seasons_data:
                         context.user_data['series_data'] = seasons_data
                         context.user_data['base_title'] = info['base_title']
@@ -761,20 +788,37 @@ async def search_movies(update, context):
                         )
                         schedule_delete(context, chat_id, [msg.message_id])
                         return MAIN_MENU
-            
+            # --- FIX END ---
+
+            # Agar hum yahan phonche, matlab ye ya toh Movie hai ya Specific Episode file hai.
+            # Ab Quality check karke file bhejo.
             qualities = get_all_movie_qualities(movie_id)
+            
             if qualities and len(qualities) > 1:
+                # Multiple qualities available -> Show buttons
                 msg = await update.message.reply_text(
                     f"🎬 **{title}**\n\nSelect Quality ⬇️",
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                     parse_mode='Markdown'
                 )
                 schedule_delete(context, chat_id, [msg.message_id])
+            
             elif qualities:
+                # Single quality available -> Send directly
                 quality, url_q, file_id_q, _ = qualities[0]
-                await send_movie_file(update, context, f"{title} [{quality}]", url_q or url, file_id_q or file_id)
+                # Use updated title with quality info
+                display_title = f"{title} [{quality}]"
+                # Use quality URL/FileID if available, else fallback to main
+                final_url = url_q if url_q else url
+                final_file_id = file_id_q if file_id_q else file_id
+                
+                await send_movie_file(update, context, display_title, final_url, final_file_id)
+            
             else:
+                # No quality variants -> Send main file
                 await send_movie_file(update, context, title, url, file_id)
+
+        # 5. Handle Multiple Results (List View)
         else:
             context.user_data['search_results'] = movies_found
             msg = await update.message.reply_text(
@@ -788,6 +832,7 @@ async def search_movies(update, context):
     
     except Exception as e:
         logger.error(f"Error in search: {e}")
+        # Error reply only in private chat
         if update.effective_chat.type == "private":
             try:
                 msg = await update.message.reply_text("❌ Something went wrong. Please try again.")
@@ -795,7 +840,6 @@ async def search_movies(update, context):
             except:
                 pass
         return MAIN_MENU
-
 async def group_message_handler(update, context):
     """Silent group handler - only responds to potential movie searches"""
     try:
