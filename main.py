@@ -590,12 +590,12 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         sent_msg = None
         caption_text = (
-            f"🎬 **{title}**\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
-            f"📢 <a href='{FILMFYBOX_CHANNEL_URL}'>Main Channel</a> | 💬 <a href='{FILMFYBOX_GROUP_URL}'>Support Group</a>\n\n"
-            f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
-        )
+    f"🎬 **{title}**\n"
+    f"━━━━━━━━━━━━━━━━━\n"
+    f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
+    f"📢 <a href='{FILMFYBOX_CHANNEL_URL}'>Main Channel</a> | 💬 <a href='{FILMFYBOX_GROUP_URL}'>Support Group</a>\n\n"
+    f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
+)
         
         join_keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
