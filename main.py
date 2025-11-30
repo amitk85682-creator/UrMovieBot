@@ -700,18 +700,26 @@ async def search_movies(update, context):
             return MAIN_MENU
         
         elif len(movies_found) == 1:
-            movie_id, title, url, file_id, is_series_flag = movies_found
+            movie_id, title, url, file_id, is_series_flag = movies_found[0]
+            
+            # DEBUG LOGGING
+            logger.info(f"Found movie: ID={movie_id}, Title={title}, URL={url}, FileID={file_id}, IsSeries={is_series_flag}")
             
             # Smart Series Handling
             if is_series_flag:
                 # Did USER search for a specific episode?
                 if is_series(user_message):
-                    # YES - User searched for specific episode (e.g., "Landman S01E01")
-                    # Fetch qualities from movie_files table
+                    # YES - User searched for specific episode
                     qualities = get_all_movie_qualities(movie_id)
                     
+                    # DEBUG LOGGING
+                    logger.info(f"Qualities found: {len(qualities) if qualities else 0}")
+                    if qualities:
+                        for i, q in enumerate(qualities):
+                            logger.info(f"Quality {i}: {q}")
+                    
                     if qualities and len(qualities) > 1:
-                        # Multiple qualities available - show selection menu
+                        # Multiple qualities available
                         msg = await update.message.reply_text(
                             f"🎬 **{title}**\n\nSelect Quality ⬇️",
                             reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
@@ -720,21 +728,25 @@ async def search_movies(update, context):
                         schedule_delete(context, chat_id, [msg.message_id])
                     elif qualities:
                         # Single quality - send directly
-                        quality_name, url_final, file_id_final, _ = qualities  # ✅ FIXED
+                        quality_name, url_final, file_id_final, _ = qualities[0]
                         
-                        # Use quality's URL/file_id if available, fallback to main
+                        # DEBUG LOGGING
+                        logger.info(f"Single quality: name={quality_name}, url={url_final}, file_id={file_id_final}")
+                        
                         final_url = url_final if url_final else url
                         final_file_id = file_id_final if file_id_final else file_id
                         
+                        logger.info(f"Sending with: URL={final_url}, FileID={final_file_id}")
+                        
                         await send_movie_file(update, context, title, final_url, final_file_id)
                     else:
-                        # No qualities in movie_files - use main movies table data
+                        # No qualities in movie_files
+                        logger.info(f"No qualities found, using main: URL={url}, FileID={file_id}")
                         await send_movie_file(update, context, title, url, file_id)
                     
                     return MAIN_MENU
                 else:
-                    # NO - User searched for base series name (e.g., "Landman")
-                    # Show season selection menu
+                    # NO - User searched for base series name
                     info = parse_series_info(title)
                     if info['is_series'] and info['base_title']:
                         seasons_data = get_series_episodes(info['base_title'])
@@ -750,11 +762,10 @@ async def search_movies(update, context):
                             schedule_delete(context, chat_id, [msg.message_id])
                             return MAIN_MENU
             
-            # Regular Movie (not a series)
+            # Regular Movie
             qualities = get_all_movie_qualities(movie_id)
             
             if qualities and len(qualities) > 1:
-                # Multiple qualities - show selection menu
                 msg = await update.message.reply_text(
                     f"🎬 **{title}**\n\nSelect Quality ⬇️",
                     reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
@@ -762,19 +773,17 @@ async def search_movies(update, context):
                 )
                 schedule_delete(context, chat_id, [msg.message_id])
             elif qualities:
-                # Single quality - send directly
-                quality_name, url_final, file_id_final, _ = qualities  # ✅ FIXED
+                quality_name, url_final, file_id_final, _ = qualities[0]
                 
                 final_url = url_final if url_final else url
                 final_file_id = file_id_final if file_id_final else file_id
                 
                 await send_movie_file(update, context, title, final_url, final_file_id)
             else:
-                # No qualities - fallback to main movies table data
                 await send_movie_file(update, context, title, url, file_id)
         
         else:
-            # Multiple results found - show selection menu
+            # Multiple results
             context.user_data['search_results'] = movies_found
             msg = await update.message.reply_text(
                 f"🔍 **Found {len(movies_found)} results**\n\nSelect one ⬇️",
