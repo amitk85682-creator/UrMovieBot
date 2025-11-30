@@ -590,12 +590,14 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         sent_msg = None
         caption_text = (
-    f"🎬 **{title}**\n"
-    f"━━━━━━━━━━━━━━━━━\n"
-    f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
-    f"📢 <a href='{FILMFYBOX_CHANNEL_URL}'>Main Channel</a> | 💬 <a href='{FILMFYBOX_GROUP_URL}'>Support Group</a>\n\n"
-    f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
-)
+            f"🎬 **{title}**\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"📢 **Channel:** @filmfybox\n"
+            f"💬 **Group:** @Filmfybox002\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"⏰ Auto-delete: **60 seconds**\n"
+            f"💡 Forward to save permanently!"
+        )
         
         join_keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
@@ -607,7 +609,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 chat_id=chat_id,
                 document=file_id,
                 caption=caption_text,
-                parse_mode='HTML',
+                parse_mode='Markdown',
                 reply_markup=join_keyboard
             )
         elif url and url.startswith("https://t.me/c/"):
@@ -620,7 +622,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     from_chat_id=from_chat_id,
                     message_id=message_id,
                     caption=caption_text,
-                    parse_mode='HTML',
+                    parse_mode='Markdown',
                     reply_markup=join_keyboard
                 )
             except Exception as e:
