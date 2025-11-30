@@ -590,12 +590,12 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         sent_msg = None
         caption_text = (
-            f"🎬 **{title}**\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
-            f"📢 <a href='{CHANNEL_LINK}'>Main Channel</a> | 💬 <a href='{GROUP_LINK}'>Support Group</a>\n\n"
-            f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
-        )
+            f"🎬 **{title}**\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"🚀 <b>ᴊᴏɪɴ ᴏᴜʀ ᴄʜᴀɴɴᴇʟs:</b>\n"
+            f"📢 <a href='{FILMFYBOX_CHANNEL_URL}'>Main Channel</a> | 💬 <a href='{FILMFYBOX_GROUP_URL}'>Support Group</a>\n\n"
+            f"⚠️ <i>Auto-delete in 60s. Forward explicitly!</i>"
+        )
         
         join_keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
@@ -772,7 +772,7 @@ async def start(update, context):
         start_caption = (
     f"🎬 👋 Hey {user.first_name}!"  # Yahan 'f' zaroori hai
     "━━━━━━━━━━━━━━━━━━━━\n"
-    f"🤖 I'm **{BOT_NAME}**\n\n"      # Yahan bhi 'f' zaroori hai
+    f"🤖 I'm **@{bot_username}**\n\n"
     "🔥 **Features:**\n"
     "• 🎞 Latest Movies & Series\n"
     "• 📺 Multiple Quality Options\n"
