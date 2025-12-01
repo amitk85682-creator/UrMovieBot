@@ -863,7 +863,7 @@ async def start(update, context):
         )
 
         banner_msg = await update.message.reply_photo(
-            photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh_mmbgdGwsLw5sWXVDA5DnQjQ7IzDu3CurgHNCHBiG40XGy4gt51mk0_xwoAwGvQwKi6S_7NGhPtOkdV4gUyh47kKA5LvYHcA1ozxYLE44gblBOgQ7gqsccHimH-FbeDi0TfK7nEfNIhfo7rFwYFCbIPN29sTDRz2p34ZH7pldCYst4HYwGrfkXllJF0E/s1600/Gemini_Generated_Image_4fbjgh4fbjgh4fbj.png"
+            photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEj35aShWJb06jx7Kz_v5hum9RJnhFF7DK1djZor59xWvCjBGRBh_NNjAgBi-IEhG5fSTPEt24gC9wsMVw_suit8hgmAC7SPbCwuh_gk4jywJlC2OCYJYvu6CoorlndlUITqBpIowR7xMA7AF-JQsponc_TUP1U95N2lobnUdK0W9kA9cGadqbRNNd1d5Fo/s1600/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg",
             caption=start_caption,
             parse_mode='Markdown',
             reply_markup=start_keyboard
