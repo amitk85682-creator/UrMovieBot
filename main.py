@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 MAIN_MENU, SEARCHING, REQUESTING = range(3)
 
 # ==================== ENVIRONMENT VARIABLES ====================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os. environ.get("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os. environ.get("GEMINI_API_KEY")
 DATABASE_URL = os.environ.get('DATABASE_URL')
 BLOGGER_API_KEY = os.environ.get('BLOGGER_API_KEY')
 BLOG_ID = os.environ.get('BLOG_ID')
@@ -72,8 +72,8 @@ FILMFYBOX_GROUP_URL = 'https://t.me/Filmfybox002'
 # Rate limiting
 user_last_request = defaultdict(lambda: datetime.min)
 REQUEST_COOLDOWN_MINUTES = int(os.environ.get('REQUEST_COOLDOWN_MINUTES', '10'))
-SIMILARITY_THRESHOLD = int(os.environ.get('SIMILARITY_THRESHOLD', '80'))
-MAX_REQUESTS_PER_MINUTE = int(os.environ.get('MAX_REQUESTS_PER_MINUTE', '10'))
+SIMILARITY_THRESHOLD = int(os. environ.get('SIMILARITY_THRESHOLD', '80'))
+MAX_REQUESTS_PER_MINUTE = int(os.environ. get('MAX_REQUESTS_PER_MINUTE', '10'))
 
 # Auto delete delay (seconds) for normal bot messages
 AUTO_DELETE_DELAY = int(os.environ.get('AUTO_DELETE_DELAY', '300'))  # default 5 minutes
@@ -108,7 +108,7 @@ def preprocess_query(query):
         stop_words = ['movie', 'film', 'full', 'download', 'watch', 'online', 'free']
         words = query.lower().split()
         words = [w for w in words if w not in stop_words]
-        return ' '.join(words).strip()
+        return ' '.join(words). strip()
     except Exception as e:
         logger.error(f"Error in preprocess_query: {e}")
         return query
@@ -133,10 +133,10 @@ def _normalize_title_for_match(title):
             return ""
         t = re.sub(r'[^\w\s]', ' ', title)
         t = re.sub(r'\s+', ' ', t).strip()
-        return t.lower()
+        return t. lower()
     except Exception as e:
         logger.error(f"Error in _normalize_title_for_match: {e}")
-        return title.lower() if title else ""
+        return title. lower() if title else ""
 
 def is_series(title):
     """Check if title is a series based on patterns - UNCHANGED"""
@@ -164,7 +164,7 @@ def parse_series_info(title):
             'is_series': False
         }
         
-        match = re.search(r'S(\d+)\s*E\d+', title, re.IGNORECASE)
+        match = re.search(r'S(\d+)\s*E\d+', title, re. IGNORECASE)
         if match:
             info['season'] = int(match.group(1))
             info['base_title'] = title[:match.start()].strip()
@@ -225,7 +225,7 @@ async def check_user_membership(context, user_id):
         
         # Log for debugging
         if not is_member:
-            logger.info(f"User {user_id} membership check failed - Channel: {channel_joined}, Group: {group_joined}")
+            logger. info(f"User {user_id} membership check failed - Channel: {channel_joined}, Group: {group_joined}")
             user_stats[user_id]['membership_warnings'] += 1
         
         return is_member
@@ -259,9 +259,9 @@ def get_db_connection():
         logger.error(f"Database connection error: {e}")
         return None
 
-# ==================== MOVIE SEARCH WITH SERIES SUPPORT - EXACT SAME LOGIC ====================
+# ==================== MOVIE SEARCH WITH ALIASES SUPPORT ====================
 def get_movies_from_db(user_query, limit=10):
-    """Search for movies/series in database - EXACT COPY FROM YOUR CODE"""
+    """Search for movies/series in database WITH ALIASES SUPPORT"""
     conn = None
     try:
         conn = get_db_connection()
@@ -271,7 +271,7 @@ def get_movies_from_db(user_query, limit=10):
         cur = conn.cursor()
         logger.info(f"Searching for: '{user_query}'")
         
-        # Exact match first
+        # Step 1: Exact match in movies table first
         cur.execute(
             "SELECT id, title, url, file_id FROM movies WHERE LOWER(title) LIKE LOWER(%s) ORDER BY title LIMIT %s",
             (f'%{user_query}%', limit)
@@ -279,32 +279,110 @@ def get_movies_from_db(user_query, limit=10):
         exact_matches = cur.fetchall()
         
         if exact_matches:
-            logger.info(f"Found {len(exact_matches)} exact matches")
+            logger. info(f"Found {len(exact_matches)} exact title matches")
             return exact_matches
         
-        # Fuzzy search if no exact matches
-        cur.execute("SELECT id, title, url, file_id FROM movies")
+        # Step 2: Check aliases table for exact match
+        cur.execute("""
+            SELECT DISTINCT m.id, m.title, m.url, m.file_id 
+            FROM movie_aliases ma
+            JOIN movies m ON ma.movie_id = m.id
+            WHERE LOWER(ma.alias) LIKE LOWER(%s)
+            ORDER BY m.title
+            LIMIT %s
+        """, (f'%{user_query}%', limit))
+        
+        alias_exact_matches = cur.fetchall()
+        if alias_exact_matches:
+            logger.info(f"Found {len(alias_exact_matches)} alias exact matches")
+            return alias_exact_matches
+        
+        # Step 3: Fuzzy search on both movie titles AND aliases
+        # Get all movies with their aliases
+        cur.execute("""
+            SELECT m.id, m.title, m.url, m.file_id
+            FROM movies m
+        """)
         all_movies = cur.fetchall()
         
         if not all_movies:
+            logger. info("No movies found in database")
             return []
         
-        movie_titles = [movie[1] for movie in all_movies]
-        movie_dict = {movie[1]: movie for movie in all_movies}
+        # Build a dictionary: movie_id -> (title, url, file_id, aliases)
+        movie_data = {}
+        for movie_id, title, url, file_id in all_movies:
+            movie_data[movie_id] = {
+                'title': title,
+                'url': url,
+                'file_id': file_id,
+                'aliases': []
+            }
         
-        matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=limit)
+        # Fetch all aliases
+        cur.execute("""
+            SELECT movie_id, alias FROM movie_aliases
+        """)
+        aliases = cur. fetchall()
         
+        for movie_id, alias in aliases:
+            if movie_id in movie_data:
+                movie_data[movie_id]['aliases']. append(alias)
+        
+        # Build a combined list of all searchable titles
+        # Format: (original_title, movie_id) for matching
+        searchable_items = []
+        for movie_id, data in movie_data.items():
+            # Add main title
+            searchable_items. append((data['title'], movie_id, 'title'))
+            # Add all aliases
+            for alias in data['aliases']:
+                searchable_items.append((alias, movie_id, 'alias'))
+        
+        if not searchable_items:
+            logger.info("No searchable items found")
+            return []
+        
+        # Extract just the titles/aliases for fuzzy matching
+        search_titles = [item[0] for item in searchable_items]
+        
+        # Fuzzy match
+        matches = process.extract(user_query, search_titles, scorer=fuzz.token_sort_ratio, limit=limit*2)
+        
+        # Track which movie_ids we've already added (to avoid duplicates)
+        found_movie_ids = set()
         filtered_movies = []
+        
         for match in matches:
             if len(match) >= 2:
-                title, score = match[0], match[1]
-                if score >= 65 and title in movie_dict:
-                    filtered_movies.append(movie_dict[title])
+                matched_title, score = match[0], match[1]
+                
+                # Find the corresponding movie_id
+                for search_item in searchable_items:
+                    if search_item[0] == matched_title:
+                        movie_id = search_item[1]
+                        match_type = search_item[2]
+                        
+                        # Only add if score is good AND we haven't added this movie yet
+                        if score >= 60 and movie_id not in found_movie_ids:
+                            movie = movie_data[movie_id]
+                            filtered_movies.append((
+                                movie_id,
+                                movie['title'],
+                                movie['url'],
+                                movie['file_id']
+                            ))
+                            found_movie_ids.add(movie_id)
+                            
+                            match_type_str = "alias" if match_type == 'alias' else "title"
+                            logger.info(f"Fuzzy match: '{matched_title}' ({match_type_str}) -> Movie ID {movie_id}, Score: {score}")
+                        break
         
+        logger. info(f"Found {len(filtered_movies)} fuzzy matches")
         return filtered_movies[:limit]
         
     except Exception as e:
-        logger.error(f"Database query error: {e}")
+        logger.error(f"Database query error: {e}", exc_info=True)
         return []
     finally:
         if conn:
@@ -313,7 +391,6 @@ def get_movies_from_db(user_query, limit=10):
                 conn.close()
             except:
                 pass
-
 def get_all_movie_qualities(movie_id):
     """Fetch all available qualities - EXACT COPY FROM YOUR CODE"""
     conn = get_db_connection()
@@ -366,7 +443,7 @@ def create_movie_selection_keyboard(movies, page=0, movies_per_page=5):
     total_pages = (len(movies) + movies_per_page - 1) // movies_per_page
 
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️ Previous", callback_data=f"page_{page-1}"))
+        nav_buttons. append(InlineKeyboardButton("◀️ Previous", callback_data=f"page_{page-1}"))
     
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
@@ -416,7 +493,7 @@ def get_series_episodes(base_title):
         if not conn:
             return {}
         
-        cur = conn.cursor()
+        cur = conn. cursor()
         
         cur.execute("""
             SELECT id, title FROM movies 
@@ -434,11 +511,11 @@ def get_series_episodes(base_title):
                     seasons[info['season']].append({
                         'id': ep_id,
                         'title': title,
-                        'episode': info.get('episode', 0)
+                        'episode': info. get('episode', 0)
                     })
         
         for season in seasons:
-            seasons[season].sort(key=lambda x: x['episode'])
+            seasons[season]. sort(key=lambda x: x['episode'])
         
         return dict(seasons)
     except Exception as e:
@@ -467,7 +544,7 @@ def create_season_selection_keyboard(seasons_data, base_title):
         
         return InlineKeyboardMarkup(keyboard)
     except Exception as e:
-        logger.error(f"Error creating season keyboard: {e}")
+        logger. error(f"Error creating season keyboard: {e}")
         return None
 
 def create_episode_selection_keyboard(episodes, season_num):
@@ -476,7 +553,7 @@ def create_episode_selection_keyboard(episodes, season_num):
         keyboard = []
         
         for ep in episodes:
-            ep_num = ep.get('episode', 0)
+            ep_num = ep. get('episode', 0)
             button_text = f"▶️ Episode {ep_num}" if ep_num else ep['title'][:40]
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"movie_{ep['id']}")])
         
@@ -561,7 +638,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 f"Select your preferred quality:"
             )
             keyboard = create_quality_selection_keyboard(movie_id, title, qualities)
-            msg = await context.bot.send_message(
+            msg = await context. bot.send_message(
                 chat_id=chat_id,
                 text=selection_text,
                 reply_markup=keyboard,
@@ -582,7 +659,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 "⚠️ **AUTO-DELETE WARNING**\n"
                 "━━━━━━━━━━━━━━━━━\n"
                 "❗ File deletes in **60 seconds**\n"
-                "📤 **Forward NOW to save!**\n"
+                "📤 **Forward NOW to save! **\n"
                 "━━━━━━━━━━━━━━━━━"
             ),
             parse_mode='Markdown'
@@ -639,7 +716,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         elif url and url.startswith("https://t.me/"):
             try:
                 parts = url.rstrip('/').split('/')
-                username = parts[-2].lstrip("@")
+                username = parts[-2]. lstrip("@")
                 message_id = int(parts[-1])
                 from_chat_id = f"@{username}"
                 sent_msg = await context.bot.copy_message(
@@ -687,7 +764,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     except Exception as e:
         logger.error(f"Error sending movie: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="❌ Failed to send file.")
+        await context. bot.send_message(chat_id=chat_id, text="❌ Failed to send file.")
 
 async def send_movie_file(update, context, title, url=None, file_id=None):
     """Alternative send function with membership check"""
@@ -722,9 +799,9 @@ async def start(update, context):
     """Premium start command"""
     try:
         # Handle deep links
-        if context.args and context.args[0].startswith("movie_"):
+        if context.args and context.args[0]. startswith("movie_"):
             try:
-                movie_id = int(context.args[0].split('_')[1])
+                movie_id = int(context.args[0]. split('_')[1])
                 
                 # CHECK MEMBERSHIP FIRST
                 user_id = update.effective_user.id
@@ -732,7 +809,7 @@ async def start(update, context):
                 
                 if not is_member:
                     join_msg = await update.message.reply_text(
-                        "🚫 **Join Required!**\n\n"
+                        "🚫 **Join Required! **\n\n"
                         "Join our Channel and Group to access movies:",
                         reply_markup=get_force_join_keyboard(),
                         parse_mode='Markdown'
@@ -760,7 +837,7 @@ async def start(update, context):
         bot_username = bot_info.username
 
         start_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}?startgroup=true")],
+            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}? startgroup=true")],
             [
                 InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
                 InlineKeyboardButton("💬 Group", url=FILMFYBOX_GROUP_URL)
@@ -779,14 +856,14 @@ async def start(update, context):
             "🛡 Auto‑delete privacy enabled\n"
             "📂 Seasons • Episodes • Clean UI\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "▶️ *Type any movie / series name to start...*\n"
+            "▶️ *Type any movie / series name to start.. .*\n"
             "`Avengers Endgame`\n"
             "`Stranger Things S01E01`\n"
             "`Landman Season 1`"
         )
 
         banner_msg = await update.message.reply_photo(
-            photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh_mmbgdGwsLw5sWXVDA5DnQjQ7IzDu3CurgHNCHBiG40XGy4gt51mk0_xwoAwGvQwKi6S_7NGhPtOkdV4gUyh47kKA5LvYHcA1ozxYLE44gblBOgQ7gqsccHimH-FbeDi0TfK7nEfNIhfo7rFwYFCbIPN29sTDRz2p34ZH7pldCYst4HYwGrfkXllJF0E/s1600/Gemini_Generated_Image_4fbjgh4fbjgh4fbj.png",
+            photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh_mmbgdGwsLw5sWXVDA5DnQjQ7IzDu3CurgHNCHBiG40XGy4gt51mk0_xwoAwGvQwKi6S_7NGhPtOkdV4gUyh47kKA5LvYHcA1ozxYLE44gblBOgQ7gqsccHim[...]
             caption=start_caption,
             parse_mode='Markdown',
             reply_markup=start_keyboard
@@ -794,7 +871,7 @@ async def start(update, context):
         schedule_delete(context, chat_id, [banner_msg.message_id])
         return MAIN_MENU
     except Exception as e:
-        logger.error(f"Error in start: {e}")
+        logger. error(f"Error in start: {e}")
         return MAIN_MENU
 
 async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -810,20 +887,20 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
              return await main_menu(update, context)
         
         # Check membership BEFORE search
-        user_id = update.effective_user.id
+        user_id = update. effective_user.id
         is_member = await check_user_membership(context, user_id)
         
         if not is_member:
-            join_msg = await update.message.reply_text(
+            join_msg = await update.message. reply_text(
                 "🚫 **MEMBERSHIP REQUIRED**\n\n"
                 "You must join BOTH:\n"
                 "📢 Channel: @FilmfyBox\n"
                 "💬 Group: @FilmfyBox002\n\n"
-                "To search and download movies!",
+                "To search and download movies! ",
                 reply_markup=get_force_join_keyboard(),
                 parse_mode='Markdown'
             )
-            schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
+            schedule_delete(context, update.effective_chat.id, [join_msg. message_id])
             return MAIN_MENU
 
         # 1. Search in DB (EXACT SAME LOGIC)
@@ -851,7 +928,7 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = create_movie_selection_keyboard(movies, page=0)
         
-        result_msg = await update.message.reply_text(
+        result_msg = await update.message. reply_text(
             f"🎬 **Found {len(movies)} results**\n"
             f"Search: `{query}`\n\n"
             f"👇 Select your movie:",
@@ -866,17 +943,17 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MAIN_MENU
 
     except Exception as e:
-        logger.error(f"Error in search_movies: {e}")
+        logger. error(f"Error in search_movies: {e}")
         await update.message.reply_text("❌ Search failed.")
         return MAIN_MENU
 
 async def group_message_handler(update, context):
     """Group handler WITH MEMBERSHIP WARNING"""
     try:
-        if not update.message or not update.message.text or update.message.from_user.is_bot:
+        if not update.message or not update. message.text or update.message.from_user.is_bot:
             return
         
-        message_text = update.message.text.strip()
+        message_text = update.message.text. strip()
         user = update.effective_user
         
         if len(message_text) < 4 or message_text.startswith('/'):
@@ -899,7 +976,7 @@ async def group_message_handler(update, context):
         ]])
         
         reply_msg = await update.message.reply_text(
-            f"Hey {user.mention_markdown()}! 👋\n\n"
+            f"Hey {user.mention_markdown()}!  👋\n\n"
             f"{emoji} **{title}**\n\n"
             f"⚠️ **Note:** Channel & Group membership required!\n"
             f"Tap below to receive in PM ⬇️",
@@ -909,7 +986,7 @@ async def group_message_handler(update, context):
         
         schedule_delete(context, update.effective_chat.id, [reply_msg.message_id], 120)
     except Exception as e:
-        logger.error(f"Group handler error: {e}")
+        logger. error(f"Group handler error: {e}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all callbacks - WITH MEMBERSHIP CHECKS"""
@@ -929,9 +1006,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_member = await check_user_membership(context, user_id)
             if is_member:
                 await query.edit_message_text(
-                    "✅ **VERIFIED!**\n\n"
-                    "Welcome to FilmfyBox Premium! 🎬\n"
-                    "You can now search any movie...",
+                    "✅ **VERIFIED! **\n\n"
+                    "Welcome to FilmfyBox Premium!  🎬\n"
+                    "You can now search any movie.. .",
                     parse_mode='Markdown'
                 )
                 schedule_delete(context, query.message.chat.id, [query.message.message_id], 30)
@@ -960,13 +1037,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Movie selection WITH MEMBERSHIP CHECK
-        elif query.data.startswith("movie_"):
+        elif query.data. startswith("movie_"):
             # CHECK MEMBERSHIP FIRST
             is_member = await check_user_membership(context, user_id)
             if not is_member:
                 await query.answer("❌ Join our Channel and Group first!", show_alert=True)
                 await query.edit_message_text(
-                    "🚫 **MEMBERSHIP REQUIRED!**",
+                    "🚫 **MEMBERSHIP REQUIRED! **",
                     reply_markup=get_force_join_keyboard()
                 )
                 return
@@ -991,7 +1068,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if not qualities:
                 # No qualities in movie_files - use main table
-                await query.edit_message_text(f"📤 Sending **{title}**...", parse_mode='Markdown')
+                await query.edit_message_text(f"📤 Sending **{title}**.. .", parse_mode='Markdown')
                 
                 conn = get_db_connection()
                 cur = conn.cursor()
@@ -1027,7 +1104,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not is_member:
                 await query.answer("❌ Membership required!", show_alert=True)
                 await query.edit_message_text(
-                    "🚫 Join our Channel and Group!",
+                    "🚫 Join our Channel and Group! ",
                     reply_markup=get_force_join_keyboard()
                 )
                 return
@@ -1036,9 +1113,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             movie_id = int(parts[1])
             selected_quality = parts[2]
 
-            movie_data = context.user_data.get('selected_movie_data')
+            movie_data = context.user_data. get('selected_movie_data')
 
-            if not movie_data or movie_data.get('id') != movie_id:
+            if not movie_data or movie_data. get('id') != movie_id:
                 qualities = get_all_movie_qualities(movie_id)
                 movie_data = {'id': movie_id, 'title': 'Movie', 'qualities': qualities}
 
@@ -1064,33 +1141,57 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chosen_file['file_id']
             )
         
-        # Group get WITH MEMBERSHIP CHECK
+        # Group get WITH MEMBERSHIP CHECK - FIXED VERSION
         elif query.data.startswith("group_get_"):
             parts = query.data.split('_')
             movie_id = int(parts[2])
             original_user_id = int(parts[3])
             
             if query.from_user.id != original_user_id:
-                await query.answer("This button is not for you!", show_alert=True)
+                await query. answer("This button is not for you!", show_alert=True)
                 return
             
-            # CRITICAL MEMBERSHIP CHECK
+            # Step 1: Check membership FIRST (before opening PM)
             is_member = await check_user_membership(context, original_user_id)
+            
             if not is_member:
+                # Step 2: Send join message to GROUP (where button was clicked)
                 await query.edit_message_text(
                     "🚫 **MEMBERSHIP REQUIRED!**\n\n"
-                    "Join BOTH to get movies:\n"
-                    "📢 @filmfybox\n"
-                    "💬 @Filmfybox002",
+                    "You need to join BOTH to get movies:\n\n"
+                    "📢 **Channel:** @filmfybox\n"
+                    "💬 **Group:** @Filmfybox002\n\n"
+                    "After joining, click the button again ✅",
                     reply_markup=get_force_join_keyboard(),
                     parse_mode='Markdown'
                 )
+                
+                # Step 3: Also send PM to user with join links
+                try:
+                    pm_msg = await context.bot.send_message(
+                        chat_id=original_user_id,
+                        text=(
+                            "🚫 **ACCESS DENIED**\n\n"
+                            "You requested a file but you're not a member yet!\n\n"
+                            "Join BOTH communities:\n"
+                            "📢 @filmfybox\n"
+                            "💬 @Filmfybox002\n\n"
+                            "Then go back to group and click the button again!"
+                        ),
+                        reply_markup=get_force_join_keyboard(),
+                        parse_mode='Markdown'
+                    )
+                    schedule_delete(context, original_user_id, [pm_msg.message_id], 120)
+                except telegram.error.Forbidden:
+                    logger.debug(f"Could not send PM to {original_user_id}, they may have blocked bot")
+                
                 return
             
+            # Step 4: User is verified!  Get movie data and send to PM
             try:
                 conn = get_db_connection()
                 if conn:
-                    cur = conn.cursor()
+                    cur = conn. cursor()
                     cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
                     movie_data = cur.fetchone()
                     cur.close()
@@ -1100,45 +1201,58 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         title, url, file_id = movie_data
                         qualities = get_all_movie_qualities(movie_id)
                         
-                        # Send to PM
+                        # Step 5: Send to PM with quality selection or direct file
                         if qualities and len(qualities) > 1:
-                            await context.bot.send_message(
+                            pm_msg = await context.bot.send_message(
                                 chat_id=original_user_id,
-                                text=f"🎬 **{title}**\n\nSelect Quality:",
+                                text=f"✅ **{title}**\n\n🎯 Select Quality:",
                                 reply_markup=create_quality_selection_keyboard(movie_id, title, qualities),
                                 parse_mode='Markdown'
                             )
+                            schedule_delete(context, original_user_id, [pm_msg.message_id], 300)
                         else:
-                            # Create dummy update for PM
+                            # Create dummy update for sending directly
                             dummy_update = Update(
                                 update_id=0,
                                 message=telegram.Message(
                                     message_id=0,
                                     date=datetime.now(),
-                                    chat=telegram.Chat(id=original_user_id, type='private')
+                                    chat=telegram.Chat(id=original_user_id, type='private'),
+                                    from_user=query.from_user
                                 )
                             )
                             dummy_update._effective_user = query.from_user
+                            dummy_update._effective_chat = telegram.Chat(id=original_user_id, type='private')
+                            
                             await send_movie_to_user(dummy_update, context, movie_id, title, url, file_id)
                         
-                        await query.edit_message_text("✅ Check your PM!")
+                        # Step 6: Update group message
+                        await query.edit_message_text(
+                            "✅ **VERIFIED & SENT! **\n\n"
+                            f"📤 File sent to your PM!\n"
+                            f"🎬 **{title}**\n\n"
+                            "Check your messages ⬇️",
+                            parse_mode='Markdown'
+                        )
+                        schedule_delete(context, query.message.chat.id, [query.message.message_id], 120)
                         
             except telegram.error.Forbidden:
-                bot_username = (await context.bot.get_me()).username
-                deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🤖 Start Bot", url=deep_link)
-                ]])
                 await query.edit_message_text(
-                    "❌ Please start the bot first!",
-                    reply_markup=keyboard
+                    "❌ **ERROR! **\n\n"
+                    "Could not send file to PM.\n"
+                    "Please /start the bot first in private chat! ",
+                    parse_mode='Markdown'
                 )
+            except Exception as e:
+                logger.error(f"Error in group_get: {e}")
+                await query. answer(f"Error: {str(e)}", show_alert=True)
+            
             return
         
         # Other callbacks
         elif query.data == "why_join_info":
             why_text = (
-                "❓ **Why Join?**\n\n"
+                "❓ **Why Join? **\n\n"
                 "✅ **Benefits:**\n"
                 "• Unlimited movie access\n"
                 "• HD/4K quality files\n"
@@ -1172,9 +1286,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📢 @filmfybox\n"
                 "💬 @Filmfybox002"
             )
-            await query.edit_message_text(about_text, parse_mode='Markdown')
+            await query. edit_message_text(about_text, parse_mode='Markdown')
         
-        elif query.data.startswith("page_"):
+        elif query. data. startswith("page_"):
             page = int(query.data.replace("page_", ""))
             movies = context.user_data.get('search_results', [])
             if movies:
@@ -1186,10 +1300,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif query.data == "cancel_selection":
             await query.edit_message_text("❌ Cancelled.")
-            schedule_delete(context, query.message.chat.id, [query.message.message_id], 5)
+            schedule_delete(context, query.message.chat.id, [query. message.message_id], 5)
             
     except Exception as e:
-        logger.error(f"Callback error: {e}")
+        logger. error(f"Callback error: {e}")
         try:
             await query.answer("❌ Error occurred!", show_alert=True)
         except:
@@ -1204,7 +1318,7 @@ async def main_menu(update, context):
         
         if not is_member:
             msg = await update.message.reply_text(
-                "🚫 **JOIN REQUIRED!**\n\n"
+                "🚫 **JOIN REQUIRED! **\n\n"
                 "Join our Channel and Group to search:",
                 reply_markup=get_force_join_keyboard(),
                 parse_mode='Markdown'
@@ -1223,8 +1337,8 @@ async def error_handler(update, context):
         logger.error(f"Exception: {context.error}", exc_info=context.error)
         if isinstance(update, Update) and update.effective_message:
             try:
-                msg = await update.effective_message.reply_text("❌ Error occurred. Try again.")
-                schedule_delete(context, update.effective_chat.id, [msg.message_id])
+                msg = await update.effective_message. reply_text("❌ Error occurred.  Try again.")
+                schedule_delete(context, update.effective_chat. id, [msg.message_id])
             except:
                 pass
     except:
@@ -1249,10 +1363,10 @@ def main():
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
         
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        application = Application.builder(). token(TELEGRAM_BOT_TOKEN).build()
         
         conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', start, filters=filters.ChatType.PRIVATE)],
+            entry_points=[CommandHandler('start', start, filters=filters. ChatType.PRIVATE)],
             states={
                 MAIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, main_menu)],
                 SEARCHING: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, search_movies)],
@@ -1267,7 +1381,7 @@ def main():
         application.add_handler(conv_handler)
         application.add_error_handler(error_handler)
         
-        logger.info("✅ Bot started! Join requirements enforced.")
+        logger.info("✅ Bot started!  Join requirements enforced.")
         application.run_polling()
     except Exception as e:
         logger.error(f"Failed to start: {e}")
