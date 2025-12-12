@@ -66,8 +66,8 @@ ADMIN_CHANNEL_ID = os.environ.get('ADMIN_CHANNEL_ID')
 # Force Join Settings
 REQUIRED_CHANNEL_ID = os.environ.get('REQUIRED_CHANNEL_ID', '@filmfybox')
 REQUIRED_GROUP_ID = os.environ.get('REQUIRED_GROUP_ID', '@Filmfybox002')
-FILMFYBOX_CHANNEL_URL = 'https://t.me/filmfybox'
-FILMFYBOX_GROUP_URL = 'https://t.me/Filmfybox002'
+FILMFYBOX_CHANNEL_URL = 'https://t.me/FilmFyBoxMoviesHD'
+FILMFYBOX_GROUP_URL = 'https://t.me/FlimfyBox'
 
 # Rate limiting
 user_last_request = defaultdict(lambda: datetime.min)
@@ -670,7 +670,7 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
             f"🎬 **{title}**\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"📢 **Channel:** @filmfybox\n"
-            f"💬 **Group:** @Filmfybox002\n"
+            f"💬 **Group:** @FlimfyBoxChat\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"⏰ Auto-delete: **60 seconds**\n"
             f"💡 Forward to save permanently!"
