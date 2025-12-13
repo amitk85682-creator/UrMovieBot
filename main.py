@@ -799,7 +799,7 @@ async def start(update, context):
     """Premium start command with Auto-Search support"""
     try:
         # Handle deep links (Check if args exist)
-        if context.args and context.args[0]:
+        if context.args and len(context.args) > 0:
             payload = context.args[0]
             user_id = update.effective_user.id
             
@@ -819,7 +819,7 @@ async def start(update, context):
                             parse_mode='Markdown'
                         )
                         schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
-                        return MAIN_MENU
+                        return MAIN_MENU  # ✅ Return here
                     
                     # Fetch and Send Movie
                     conn = get_db_connection()
@@ -833,32 +833,55 @@ async def start(update, context):
                         if movie_data:
                             title, url, file_id = movie_data
                             await send_movie_to_user(update, context, movie_id, title, url, file_id)
-                            return MAIN_MENU
-                except Exception as e:
+                            return MAIN_MENU  # ✅ Return here
+                        else:
+                            await update.message.reply_text("❌ Movie not found.")
+                            return MAIN_MENU  # ✅ ADDED: Return if no movie
+                    else:
+                        await update.message.reply_text("❌ Database error.")
+                        return MAIN_MENU  # ✅ ADDED: Return if no connection
+                        
+                except (IndexError, ValueError) as e:
                     logger.error(f"Deep link error: {e}")
+                    await update.message.reply_text("❌ Invalid link.")
+                    return MAIN_MENU  # ✅ ADDED: Return on error
 
-            # --- 2. AUTO SEARCH LINK (q_Movie_Name) [NEW LOGIC] ---
+            # --- 2. AUTO SEARCH LINK (q_Movie_Name) ---
             elif payload.startswith("q_"):
-                # Decode: q_Family_Man -> Family Man
-                query_text = payload.replace("q_", "").replace("_", " ")
-                
-                # CHECK MEMBERSHIP FIRST
-                is_member = await check_user_membership(context, user_id)
-                
-                if not is_member:
-                    join_msg = await update.message.reply_text(
-                        "🚫 **Join Required!**\n\n"
-                        "Join our Channel and Group to search:",
-                        reply_markup=get_force_join_keyboard(),
-                        parse_mode='Markdown'
-                    )
-                    schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
-                    return MAIN_MENU
+                try:
+                    # Decode: q_Family_Man -> Family Man
+                    query_text = payload.replace("q_", "", 1)  # ✅ Only first "q_" remove
+                    query_text = query_text.replace("_", " ")  # Underscores to spaces
+                    query_text = " ".join(query_text.split())  # ✅ ADDED: Clean multiple spaces
+                    
+                    logger.info(f"Deep link search query: {query_text}")
+                    
+                    # Safety check
+                    if not query_text.strip():
+                        await update.message.reply_text("❌ Invalid search query.")
+                        return MAIN_MENU
+                    
+                    # CHECK MEMBERSHIP FIRST
+                    is_member = await check_user_membership(context, user_id)
+                    
+                    if not is_member:
+                        join_msg = await update.message.reply_text(
+                            "🚫 **Join Required!**\n\n"
+                            "Join our Channel and Group to search:",
+                            reply_markup=get_force_join_keyboard(),
+                            parse_mode='Markdown'
+                        )
+                        schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
+                        return MAIN_MENU
 
-                # Simulate User Search
-                # Hum message text ko change kar rahe hain taaki search function usse padh sake
-                update.message.text = query_text
-                return await search_movies(update, context)
+                    # Simulate User Search
+                    update.message.text = query_text
+                    return await search_movies(update, context)
+                    
+                except Exception as e:
+                    logger.error(f"Error in q_ deep link: {e}")
+                    await update.message.reply_text("❌ Search error occurred.")
+                    return MAIN_MENU  # ✅ ADDED: Return on error
 
         # --- NORMAL START (No link) ---
         chat_id = update.effective_chat.id
@@ -899,10 +922,10 @@ async def start(update, context):
         )
         schedule_delete(context, chat_id, [banner_msg.message_id])
         return MAIN_MENU
+        
     except Exception as e:
         logger.error(f"Error in start: {e}")
         return MAIN_MENU
-
 async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search for movies - EXACT FLOW FROM YOUR CODE"""
     try:
