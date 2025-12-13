@@ -669,8 +669,8 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         caption_text = (
             f"🎬 **{title}**\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"📢 **Channel:** @filmfybox\n"
-            f"💬 **Group:** @FlimfyBoxChat\n"
+            f"📢 **Channel:** [FilmFyBox](https://t.me/FilmFyBoxMoviesHD)\n"
+            f"💬 **Group:** [FlimfyBox](https://t.me/FlimfyBox)\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"⏰ Auto-delete: **60 seconds**\n"
             f"💡 Forward to save permanently!"
@@ -782,8 +782,8 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
             text=(
                 "🚫 **ACCESS DENIED**\n\n"
                 "Join our Channel and Group first:\n"
-                "📢 @filmfybox\n"
-                "💬 @Filmfybox002"
+                "📢 [Join Channel](https://t.me/FilmFyBoxMoviesHD)\n"
+                "💬 [Join Group](https://t.me/FlimfyBox)"
             ),
             reply_markup=get_force_join_keyboard(),
             parse_mode='Markdown'
@@ -796,48 +796,77 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
 
 # ==================== BOT HANDLERS ====================
 async def start(update, context):
-    """Premium start command"""
+    """Premium start command with Auto-Search support"""
     try:
-        # Handle deep links
-        if context.args and context.args[0]. startswith("movie_"):
-            try:
-                movie_id = int(context.args[0]. split('_')[1])
+        # Handle deep links (Check if args exist)
+        if context.args and context.args[0]:
+            payload = context.args[0]
+            user_id = update.effective_user.id
+            
+            # --- 1. MOVIE ID LINK (movie_123) ---
+            if payload.startswith("movie_"):
+                try:
+                    movie_id = int(payload.split('_')[1])
+                    
+                    # CHECK MEMBERSHIP FIRST
+                    is_member = await check_user_membership(context, user_id)
+                    
+                    if not is_member:
+                        join_msg = await update.message.reply_text(
+                            "🚫 **Join Required!**\n\n"
+                            "Join our Channel and Group to access movies:",
+                            reply_markup=get_force_join_keyboard(),
+                            parse_mode='Markdown'
+                        )
+                        schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
+                        return MAIN_MENU
+                    
+                    # Fetch and Send Movie
+                    conn = get_db_connection()
+                    if conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
+                        movie_data = cur.fetchone()
+                        cur.close()
+                        conn.close()
+                        
+                        if movie_data:
+                            title, url, file_id = movie_data
+                            await send_movie_to_user(update, context, movie_id, title, url, file_id)
+                            return MAIN_MENU
+                except Exception as e:
+                    logger.error(f"Deep link error: {e}")
+
+            # --- 2. AUTO SEARCH LINK (q_Movie_Name) [NEW LOGIC] ---
+            elif payload.startswith("q_"):
+                # Decode: q_Family_Man -> Family Man
+                query_text = payload.replace("q_", "").replace("_", " ")
                 
                 # CHECK MEMBERSHIP FIRST
-                user_id = update.effective_user.id
                 is_member = await check_user_membership(context, user_id)
                 
                 if not is_member:
                     join_msg = await update.message.reply_text(
-                        "🚫 **Join Required! **\n\n"
-                        "Join our Channel and Group to access movies:",
+                        "🚫 **Join Required!**\n\n"
+                        "Join our Channel and Group to search:",
                         reply_markup=get_force_join_keyboard(),
                         parse_mode='Markdown'
                     )
                     schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
                     return MAIN_MENU
-                
-                conn = get_db_connection()
-                if conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                    movie_data = cur.fetchone()
-                    cur.close()
-                    conn.close()
-                    
-                    if movie_data:
-                        title, url, file_id = movie_data
-                        await send_movie_to_user(update, context, movie_id, title, url, file_id)
-                        return MAIN_MENU
-            except Exception as e:
-                logger.error(f"Deep link error: {e}")
-        
+
+                # Simulate User Search
+                # Hum message text ko change kar rahe hain taaki search function usse padh sake
+                update.message.text = query_text
+                return await search_movies(update, context)
+
+        # --- NORMAL START (No link) ---
         chat_id = update.effective_chat.id
         bot_info = await context.bot.get_me()
         bot_username = bot_info.username
 
         start_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}? startgroup=true")],
+            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}?startgroup=true")],
             [
                 InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
                 InlineKeyboardButton("💬 Group", url=FILMFYBOX_GROUP_URL)
@@ -856,7 +885,7 @@ async def start(update, context):
             "🛡 Auto‑delete privacy enabled\n"
             "📂 Seasons • Episodes • Clean UI\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "▶️ *Type any movie / series name to start.. .*\n"
+            "▶️ *Type any movie / series name to start...*\n"
             "`Avengers Endgame`\n"
             "`Stranger Things S01E01`\n"
             "`Landman Season 1`"
@@ -871,7 +900,7 @@ async def start(update, context):
         schedule_delete(context, chat_id, [banner_msg.message_id])
         return MAIN_MENU
     except Exception as e:
-        logger. error(f"Error in start: {e}")
+        logger.error(f"Error in start: {e}")
         return MAIN_MENU
 
 async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1174,8 +1203,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "🚫 **ACCESS DENIED**\n\n"
                             "You requested a file but you're not a member yet!\n\n"
                             "Join BOTH communities:\n"
-                            "📢 @filmfybox\n"
-                            "💬 @Filmfybox002\n\n"
+                            "📢 [Channel](https://t.me/FilmFyBoxMoviesHD)\n"
+                            "💬 [Group](https://t.me/FlimfyBox)\n\n"
                             "Then go back to group and click the button again!"
                         ),
                         reply_markup=get_force_join_keyboard(),
