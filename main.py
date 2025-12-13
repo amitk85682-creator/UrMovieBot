@@ -55,7 +55,8 @@ CHANNEL_URL = 'https://t.me/FilmFyBoxMoviesHD'
 GROUP_URL = 'https://t.me/FlimfyBox'
 
 # Auto delete delay
-AUTO_DELETE_DELAY = int(os.environ.get('AUTO_DELETE_DELAY', '300'))
+verified_users = {} 
+VERIFICATION_CACHE_TIME = 3600  # 1 Hour (3600 seconds) tak user yaad rahega
 
 # Validate
 if not TELEGRAM_BOT_TOKEN:
@@ -65,11 +66,21 @@ if not DATABASE_URL:
 
 # ==================== SIMPLE MEMBERSHIP CHECK ====================
 
-async def is_user_member(context, user_id) -> dict:
+async def is_user_member(context, user_id, force_fresh=False) -> dict:
     """
-    Check if user is member of both channel and group
-    Returns: {'is_member': bool, 'channel': bool, 'group': bool, 'error': str|None}
+    Smart Check: Pehle Memory check karega, fir API.
+    force_fresh=True tab use hoga jab user 'Verify' button dabayega.
     """
+    current_time = datetime.now()
+    
+    # 1. Check Memory (Cache) first
+    if not force_fresh and user_id in verified_users:
+        last_checked, cached_result = verified_users[user_id]
+        # Agar 1 ghante se kam hua hai, to wahi result use karo
+        if (current_time - last_checked).total_seconds() < VERIFICATION_CACHE_TIME:
+            return cached_result
+
+    # 2. Result structure
     result = {
         'is_member': False,
         'channel': False,
@@ -80,46 +91,36 @@ async def is_user_member(context, user_id) -> dict:
     try:
         # Check Channel
         try:
-            channel_member = await context.bot.get_chat_member(
-                chat_id=REQUIRED_CHANNEL, 
-                user_id=user_id
-            )
+            channel_member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
             result['channel'] = channel_member.status in [
-                ChatMember.MEMBER, 
-                ChatMember.ADMINISTRATOR, 
-                ChatMember.OWNER,
-                'member', 'administrator', 'creator'
+                ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER, 
+                'member', 'administrator', 'creator', 'restricted' # Restricted bhi member hota hai
             ]
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Channel check failed for {user_id}: {e}")
+        except telegram.error.BadRequest:
             result['channel'] = False
         except telegram.error.Forbidden:
-            result['error'] = "Bot is not admin in channel!"
-            logger.error("Bot is not admin in required channel!")
+            result['error'] = "Bot Channel me Admin nahi hai!"
             return result
             
         # Check Group
         try:
-            group_member = await context.bot.get_chat_member(
-                chat_id=REQUIRED_GROUP, 
-                user_id=user_id
-            )
+            group_member = await context.bot.get_chat_member(chat_id=REQUIRED_GROUP, user_id=user_id)
             result['group'] = group_member.status in [
-                ChatMember.MEMBER, 
-                ChatMember.ADMINISTRATOR, 
-                ChatMember.OWNER,
-                'member', 'administrator', 'creator'
+                ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER,
+                'member', 'administrator', 'creator', 'restricted'
             ]
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Group check failed for {user_id}: {e}")
+        except telegram.error.BadRequest:
             result['group'] = False
         except telegram.error.Forbidden:
-            result['error'] = "Bot is not admin in group!"
-            logger.error("Bot is not admin in required group!")
+            result['error'] = "Bot Group me Admin nahi hai!"
             return result
         
         # Both must be True
         result['is_member'] = result['channel'] and result['group']
+        
+        # 3. Save to Memory (Agar user member hai to save karlo)
+        if result['is_member']:
+            verified_users[user_id] = (current_time, result)
         
         return result
         
@@ -563,22 +564,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     # ============ VERIFY BUTTON ============
+    # ============ VERIFY BUTTON ============
     if data == "verify":
-        check = await is_user_member(context, user_id)
+        # Yahan hum 'force_fresh=True' bhejenge taaki cache ignore kare aur naya check kare
+        check = await is_user_member(context, user_id, force_fresh=True)
         
         if check['is_member']:
             await query.edit_message_text(
-                "✅ **Verified!**\n\n"
-                "Ab koi bhi movie search karo! 🎬",
+                "✅ **Verified Successfully!**\n\n"
+                "Ab aap koi bhi movie search kar sakte hain! 🎬\n"
+                "Bas movie ka naam likhiye 👇",
                 parse_mode='Markdown'
             )
-            schedule_delete(context, chat_id, [query.message.message_id], 30)
+            # Purana verify message delete kar do
+            schedule_delete(context, chat_id, [query.message.message_id], 10)
         else:
-            await query.edit_message_text(
-                get_join_message(check['channel'], check['group']),
-                reply_markup=get_join_keyboard(),
-                parse_mode='Markdown'
-            )
+            # Agar abhi bhi join nahi kiya
+            try:
+                await query.edit_message_text(
+                    get_join_message(check['channel'], check['group']),
+                    reply_markup=get_join_keyboard(),
+                    parse_mode='Markdown'
+                )
+            except telegram.error.BadRequest:
+                # Agar message same hai to error aata hai, usse ignore karo aur popup dikhao
+                await query.answer("❌ Abhi bhi join nahi kiya! Dobara check karein.", show_alert=True)
         return
     
     # ============ MOVIE SELECTION ============
