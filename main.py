@@ -798,8 +798,8 @@ async def send_movie_file(update, context, title, url=None, file_id=None):
 async def start(update, context):
     """Premium start command with Auto-Search support"""
     try:
-        # Handle deep links (Check if args exist)
-        if context.args and len(context.args) > 0:
+        # Handle deep links
+        if context.args and len(context.args) > 0 and context.args[0]:
             payload = context.args[0]
             user_id = update.effective_user.id
             
@@ -819,7 +819,7 @@ async def start(update, context):
                             parse_mode='Markdown'
                         )
                         schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
-                        return MAIN_MENU  # ✅ Return here
+                        return MAIN_MENU
                     
                     # Fetch and Send Movie
                     conn = get_db_connection()
@@ -833,31 +833,27 @@ async def start(update, context):
                         if movie_data:
                             title, url, file_id = movie_data
                             await send_movie_to_user(update, context, movie_id, title, url, file_id)
-                            return MAIN_MENU  # ✅ Return here
+                            return MAIN_MENU
                         else:
                             await update.message.reply_text("❌ Movie not found.")
-                            return MAIN_MENU  # ✅ ADDED: Return if no movie
-                    else:
-                        await update.message.reply_text("❌ Database error.")
-                        return MAIN_MENU  # ✅ ADDED: Return if no connection
-                        
-                except (IndexError, ValueError) as e:
+                            return MAIN_MENU
+                            
+                except Exception as e:
                     logger.error(f"Deep link error: {e}")
                     await update.message.reply_text("❌ Invalid link.")
-                    return MAIN_MENU  # ✅ ADDED: Return on error
+                    return MAIN_MENU
 
             # --- 2. AUTO SEARCH LINK (q_Movie_Name) ---
             elif payload.startswith("q_"):
                 try:
                     # Decode: q_Family_Man -> Family Man
-                    query_text = payload.replace("q_", "", 1)  # ✅ Only first "q_" remove
-                    query_text = query_text.replace("_", " ")  # Underscores to spaces
-                    query_text = " ".join(query_text.split())  # ✅ ADDED: Clean multiple spaces
+                    query_text = payload.replace("q_", "", 1)
+                    query_text = query_text.replace("_", " ")
+                    query_text = " ".join(query_text.split())
                     
-                    logger.info(f"Deep link search query: {query_text}")
+                    logger.info(f"Deep link search: {query_text}")
                     
-                    # Safety check
-                    if not query_text.strip():
+                    if not query_text or not query_text.strip():
                         await update.message.reply_text("❌ Invalid search query.")
                         return MAIN_MENU
                     
@@ -874,58 +870,83 @@ async def start(update, context):
                         schedule_delete(context, update.effective_chat.id, [join_msg.message_id])
                         return MAIN_MENU
 
-                    # Simulate User Search
-                    update.message.text = query_text
-                    return await search_movies(update, context)
+                    # ✅ FIXED: Direct search instead of setting message.text
+                    movies_found = get_movies_from_db(query_text, limit=10)
+                    
+                    if not movies_found:
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🙋 Request This Movie", callback_data=f"request_{query_text[:20]}")]
+                        ])
+                        await update.message.reply_text(
+                            f"😕 **Not Found**\n\nCouldn't find: `{query_text}`",
+                            reply_markup=keyboard,
+                            parse_mode='Markdown'
+                        )
+                        return MAIN_MENU
+                    
+                    elif len(movies_found) == 1:
+                        movie_id, title, url, file_id = movies_found[0]
+                        await send_movie_to_user(update, context, movie_id, title, url, file_id)
+                        return MAIN_MENU
+                    
+                    else:
+                        context.user_data['search_results'] = movies_found
+                        context.user_data['search_query'] = query_text
+                        
+                        keyboard = create_movie_selection_keyboard(movies_found, page=0)
+                        await update.message.reply_text(
+                            f"🎬 **Found {len(movies_found)} results**\nSearch: `{query_text}`\n\n👇 Select:",
+                            reply_markup=keyboard,
+                            parse_mode='Markdown'
+                        )
+                        return MAIN_MENU
                     
                 except Exception as e:
                     logger.error(f"Error in q_ deep link: {e}")
-                    await update.message.reply_text("❌ Search error occurred.")
-                    return MAIN_MENU  # ✅ ADDED: Return on error
+                    await update.message.reply_text("❌ Search error.")
+                    return MAIN_MENU
 
-        # --- NORMAL START (No link) ---
-        chat_id = update.effective_chat.id
-        bot_info = await context.bot.get_me()
-        bot_username = bot_info.username
-
-        start_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}?startgroup=true")],
-            [
-                InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
-                InlineKeyboardButton("💬 Group", url=FILMFYBOX_GROUP_URL)
-            ],
-            [
-                InlineKeyboardButton("ℹ️ Help", callback_data="start_help"),
-                InlineKeyboardButton("👑 About", callback_data="start_about")
-            ]
-        ])
-
-        start_caption = (
-            "✨ **Ur Movie Bot** ✨\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🎬 Movie & Series Bot\n"
-            "🔍 Ultra‑fast search • Multi‑quality\n"
-            "🛡 Auto‑delete privacy enabled\n"
-            "📂 Seasons • Episodes • Clean UI\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "▶️ *Type any movie / series name to start...*\n"
-            "`Avengers Endgame`\n"
-            "`Stranger Things S01E01`\n"
-            "`Landman Season 1`"
-        )
-
-        banner_msg = await update.message.reply_photo(
-            photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEj35aShWJb06jx7Kz_v5hum9RJnhFF7DK1djZor59xWvCjBGRBh_NNjAgBi-IEhG5fSTPEt24gC9wsMVw_suit8hgmAC7SPbCwuh_gk4jywJlC2OCYJYvu6CoorlndlUITqBpIowR7xMA7AF-JQsponc_TUP1U95N2lobnUdK0W9kA9cGadqbRNNd1d5Fo/s1600/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg",
-            caption=start_caption,
-            parse_mode='Markdown',
-            reply_markup=start_keyboard
-        )
-        schedule_delete(context, chat_id, [banner_msg.message_id])
-        return MAIN_MENU
-        
     except Exception as e:
         logger.error(f"Error in start: {e}")
-        return MAIN_MENU
+
+    # --- NORMAL START (No link) ---
+    chat_id = update.effective_chat.id
+    bot_info = await context.bot.get_me()
+    bot_username = bot_info.username
+
+    start_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_username}?startgroup=true")],
+        [
+            InlineKeyboardButton("📢 Channel", url=FILMFYBOX_CHANNEL_URL),
+            InlineKeyboardButton("💬 Group", url=FILMFYBOX_GROUP_URL)
+        ],
+        [
+            InlineKeyboardButton("ℹ️ Help", callback_data="start_help"),
+            InlineKeyboardButton("👑 About", callback_data="start_about")
+        ]
+    ])
+
+    start_caption = (
+        "✨ **Ur Movie Bot** ✨\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🎬 Movie & Series Bot\n"
+        "🔍 Ultra‑fast search • Multi‑quality\n"
+        "🛡 Auto‑delete privacy enabled\n"
+        "📂 Seasons • Episodes • Clean UI\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "▶️ *Type any movie / series name to start...*\n"
+        "`Avengers Endgame`\n"
+        "`Stranger Things S01E01`"
+    )
+
+    banner_msg = await update.message.reply_photo(
+        photo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEj35aShWJb06jx7Kz_v5hum9RJnhFF7DK1djZor59xWvCjBGRBh_NNjAgBi-IEhG5fSTPEt24gC9wsMVw_suit8hgmAC7SPbCwuh_gk4jywJlC2OCYJYvu6CoorlndlUITqBpIowR7xMA7AF-JQsponc_TUP1U95N2lobnUdK0W9kA9cGadqbRNNd1d5Fo/s1600/logo-design-for-flimfybox-a-cinematic-mo_OhkRefmbTCK6_RylGkOrAw_CtxTQGw_Tu6dY2kc64sagw.jpeg",
+        caption=start_caption,
+        parse_mode='Markdown',
+        reply_markup=start_keyboard
+    )
+    schedule_delete(context, chat_id, [banner_msg.message_id])
+    return MAIN_MENU
 async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search for movies - EXACT FLOW FROM YOUR CODE"""
     try:
