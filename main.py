@@ -488,24 +488,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return MAIN_MENU
             
             # User is member, get movie
-            try:
-                movie_id = int(arg.split('_')[1])
-                conn = get_db()
-                if conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT title, url, file_id FROM movies WHERE id = %s", (movie_id,))
-                    movie = cur.fetchone()
-                    cur.close()
-                    conn.close()
-                    
-                    if movie:
-                        title, url, file_id = movie await send_movie(update, context, movie_id, title, url, file_id)
-                    else:
-                        await update.message.reply_text("❌ Movie not found!")
-            except Exception as e:
-                logger.error(f"Deep link error: {e}")
-            
-            return MAIN_MENU
+try:
+    movie_id = int(arg.split('_')[1])
+    conn = get_db()
+    if conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT title, url, file_id FROM movies WHERE id = %s",
+            (movie_id,)
+        )
+        movie = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if movie:
+            title, url, file_id = movie
+
+            # Call async function correctly
+            await send_movie(update, context, movie_id, title, url, file_id)
+        else:
+            await update.message.reply_text("❌ Movie not found!")
+
+except Exception as e:
+    logger.error(f"Deep link error: {e}")
+
+return MAIN_MENU
+
         
         # Search link: /start q_Movie_Name
         if arg.startswith("q_"):
