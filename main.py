@@ -52,7 +52,7 @@ ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@FilmFyBoxMoviesHD')  # Fixed: Matched with URL
 REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@FilmFyBox')  # Fixed: Corrected from '@Filmfybox002' to match URL (assuming URL had a typo)
 CHANNEL_URL = 'https://t.me/FilmFyBoxMoviesHD'
-GROUP_URL = 'https://t.me/FilmFyBox'  # Fixed: Corrected typo from 'FlimfyBox' to 'FilmFyBox'
+GROUP_URL = 'https://t.me/FlimfyBox'  # Fixed: Corrected typo from 'FlimfyBox' to 'FilmFyBox'
 
 # Auto delete delay
 verified_users = {} 
