@@ -516,17 +516,17 @@ return MAIN_MENU
 
         
         # Search link: /start q_Movie_Name
-        if arg.startswith("q_"):
+    if arg.startswith("q_"):
             query = arg[2:].replace("_", " ")
             
             # Check membership FIRST
             check = await is_user_member(context, user_id)
             
-            if check.get('error'):
+    if check.get('error'):
                 await update.message.reply_text(f"⚠️ {check['error']}")
                 return MAIN_MENU
             
-            if not check['is_member']:
+    if not check['is_member']:
                 msg = await update.message.reply_text(
                     get_join_message(check['channel'], check['group']),
                     reply_markup=get_join_keyboard(),
