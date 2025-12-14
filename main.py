@@ -49,10 +49,10 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 
 # Force Join Config - APNE CHANNEL/GROUP ID DAALO
-REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@filmfybox')
-REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@Filmfybox002')
+REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@FilmFyBoxMoviesHD')  # Fixed: Matched with URL
+REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@FilmFyBox')  # Fixed: Corrected from '@Filmfybox002' to match URL (assuming URL had a typo)
 CHANNEL_URL = 'https://t.me/FilmFyBoxMoviesHD'
-GROUP_URL = 'https://t.me/FlimfyBox'
+GROUP_URL = 'https://t.me/FilmFyBox'  # Fixed: Corrected typo from 'FlimfyBox' to 'FilmFyBox'
 
 # Auto delete delay
 verified_users = {} 
@@ -547,8 +547,6 @@ async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, que
         reply_markup=movie_list_keyboard(movies),
         parse_mode='Markdown'
     )
-    
-    return MAIN_MENU
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages"""
