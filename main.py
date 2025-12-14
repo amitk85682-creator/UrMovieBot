@@ -250,14 +250,14 @@ def search_movies(query, limit=10):
         if not all_movies:
             return []
         
-        titles = [m<!--citation:1--> for m in all_movies]
+        titles = [m[1] for m in all_movies]
         matches = process.extract(query, titles, scorer=fuzz.token_sort_ratio, limit=limit)
         
         filtered = []
         for match in matches:
-            if match<!--citation:1--> >= 60:
+            if match[1] >= 60:
                 for movie in all_movies:
-                    if movie<!--citation:1--> == match:
+                    if movie[1] == match[0]:
                         filtered.append(movie)
                         break
         
@@ -489,7 +489,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # User is member, get movie
             try:
-                movie_id = int(arg.split('_')<!--citation:1-->)
+                movie_id = int(arg.split('_')[1])
                 conn = get_db()
                 if conn:
                     cur = conn.cursor()
@@ -499,7 +499,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     conn.close()
                     
                     if movie:
-                        await send_movie(update, context, movie_id, movie, movie<!--citation:1-->, movie<!--citation:2-->)
+                        title, url, file_id = movie await send_movie(update, context, movie_id, title, url, file_id)
                     else:
                         await update.message.reply_text("❌ Movie not found!")
             except Exception as e:
@@ -594,8 +594,8 @@ async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, que
 
     if len(movies) == 1:
         # Single result - send directly
-        m = movies
-        await send_movie(update, context, m, m<!--citation:1-->, m<!--citation:2-->, m<!--citation:3-->)
+        movie_id, title, url, file_id = movies[0]
+        await send_movie(update, context, movie_id, title, url, file_id)
         return MAIN_MENU
 
     # Multiple results - show list
@@ -713,7 +713,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if qualities:
             context.user_data['movie'] = {
                 'id': movie_id,
-                'title': movie<!--citation:1-->,
+                'title': movie[1],
                 'qualities': qualities
             }
             await query.edit_message_text(
@@ -723,7 +723,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.edit_message_text(f"📤 Sending **{movie<!--citation:1-->}**...", parse_mode='Markdown')
-            await send_movie(update, context, movie, movie<!--citation:1-->, movie<!--citation:2-->, movie<!--citation:3-->)
+            await send_movie(update, context, movie_id, movie[1], movie[2], movie[3])
         
         return
 
