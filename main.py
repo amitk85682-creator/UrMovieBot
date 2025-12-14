@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 import sys
+FORCE_JOIN_ENABLED = True
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 
@@ -53,10 +54,11 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 
 # Force Join Config
-REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@filmfybox')
-REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@Filmfybox002')
+REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '-1003460387180')
+REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '-1003330141433')
 CHANNEL_URL = os.environ.get('CHANNEL_URL', 'https://t.me/FilmFyBoxMoviesHD')
 GROUP_URL = os.environ.get('GROUP_URL', 'https://t.me/FlimfyBox')
+FORCE_JOIN_ENABLED = True
 
 # Auto delete delay
 AUTO_DELETE_DELAY = 60
@@ -105,88 +107,144 @@ def release_db(conn):
         except Exception as e:
             logger.error(f"Error releasing connection: {e}")
 
-# ==================== MEMBERSHIP CHECK ====================
-async def is_user_member(context: ContextTypes.DEFAULT_TYPE, user_id: int, force_fresh: bool = False) -> Dict[str, Any]:
-    """
-    Smart Check: First checks memory cache, then API.
-    force_fresh=True bypasses cache completely.
-    """
+# ==================== MEMBERSHIP CHECK (FIXED) ====================
+async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Dict[str, Any]:
+    """Check if user is member of channel and group"""
+    
+    if not FORCE_JOIN_ENABLED:
+        return {'is_member': True, 'channel': True, 'group': True, 'error': None}
+    
     current_time = datetime.now()
     
-    # 1. Check Memory (Cache) first - BUT ONLY IF NOT FORCED
+    # Check cache
     if not force_fresh and user_id in verified_users:
-        last_checked, cached_result = verified_users[user_id]
-        # If less than cache time, use cached result
+        last_checked, cached = verified_users[user_id]
         if (current_time - last_checked).total_seconds() < VERIFICATION_CACHE_TIME:
-            logger.info(f"Cache hit for user {user_id}")
-            return cached_result
+            logger.info(f"Cache hit for {user_id}")
+            return cached
     
-    # 2. Result structure
     result = {
         'is_member': False,
         'channel': False,
         'group': False,
+        'channel_status': 'unknown',
+        'group_status': 'unknown',
         'error': None
     }
     
+    # ✅ VALID STATUSES - Only actual members
+    VALID_MEMBER_STATUSES = [
+        ChatMember.MEMBER,
+        ChatMember.ADMINISTRATOR,
+        ChatMember.OWNER,
+        'member',
+        'administrator',
+        'creator'
+    ]
+    
+    # ❌ INVALID STATUSES - Not members
+    INVALID_STATUSES = [
+        ChatMember.LEFT,
+        ChatMember.BANNED,
+        ChatMember.RESTRICTED,  # Restricted = NOT a member
+        'left',
+        'kicked',
+        'restricted'
+    ]
+    
+    # ========== CHECK CHANNEL ==========
     try:
-        # Check Channel
-        try:
-            channel_member = await context.bot.get_chat_member(
-                chat_id=REQUIRED_CHANNEL, 
-                user_id=user_id
-            )
-            result['channel'] = channel_member.status in [
-                ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER,
-                'member', 'administrator', 'creator', 'restricted'
-            ]
-            logger.info(f"User {user_id} channel status: {channel_member.status}")
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Channel check BadRequest for {user_id}: {e}")
+        channel_member = await context.bot.get_chat_member(
+            chat_id=REQUIRED_CHANNEL,
+            user_id=user_id
+        )
+        status = channel_member.status
+        result['channel_status'] = str(status)
+        
+        # Check if valid member
+        if status in VALID_MEMBER_STATUSES:
+            result['channel'] = True
+            logger.info(f"✅ User {user_id} IS member of channel (status: {status})")
+        else:
             result['channel'] = False
-        except telegram.error.Forbidden as e:
-            result['error'] = "Bot is not admin in Channel!"
-            logger.error(f"Channel Forbidden: {e}")
-            return result
-        except Exception as e:
-            logger.error(f"Channel check error: {e}")
-            result['channel'] = False
+            logger.info(f"❌ User {user_id} NOT member of channel (status: {status})")
             
-        # Check Group
-        try:
-            group_member = await context.bot.get_chat_member(
-                chat_id=REQUIRED_GROUP, 
-                user_id=user_id
-            )
-            result['group'] = group_member.status in [
-                ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER,
-                'member', 'administrator', 'creator', 'restricted'
-            ]
-            logger.info(f"User {user_id} group status: {group_member.status}")
-        except telegram.error.BadRequest as e:
-            logger.warning(f"Group check BadRequest for {user_id}: {e}")
-            result['group'] = False
-        except telegram.error.Forbidden as e:
-            result['error'] = "Bot is not admin in Group!"
-            logger.error(f"Group Forbidden: {e}")
-            return result
-        except Exception as e:
-            logger.error(f"Group check error: {e}")
-            result['group'] = False
+    except telegram.error.BadRequest as e:
+        error_msg = str(e).lower()
+        if "user not found" in error_msg:
+            result['channel_status'] = 'not_found'
+            logger.info(f"User {user_id} not found in channel")
+        elif "chat not found" in error_msg:
+            result['channel_status'] = 'chat_not_found'
+            result['error'] = f"Channel {REQUIRED_CHANNEL} not found!"
+            logger.error(f"Channel not found: {REQUIRED_CHANNEL}")
+        else:
+            result['channel_status'] = f'error: {e}'
+            logger.warning(f"Channel check BadRequest: {e}")
+        result['channel'] = False
         
-        # Both must be True
-        result['is_member'] = result['channel'] and result['group']
-        
-        # 3. Save to Memory - Always update cache with fresh data
-        verified_users[user_id] = (current_time, result)
-        logger.info(f"Cache updated for user {user_id}: is_member={result['is_member']}")
-        
+    except telegram.error.Forbidden as e:
+        result['error'] = "Bot is not admin in Channel!"
+        result['channel_status'] = 'bot_not_admin'
+        logger.error(f"Channel Forbidden: {e}")
         return result
         
     except Exception as e:
-        logger.error(f"Membership check error for {user_id}: {e}")
-        result['error'] = str(e)
+        result['channel_status'] = f'error: {e}'
+        logger.error(f"Channel check error: {e}")
+        result['channel'] = False
+    
+    # ========== CHECK GROUP ==========
+    try:
+        group_member = await context.bot.get_chat_member(
+            chat_id=REQUIRED_GROUP,
+            user_id=user_id
+        )
+        status = group_member.status
+        result['group_status'] = str(status)
+        
+        # Check if valid member
+        if status in VALID_MEMBER_STATUSES:
+            result['group'] = True
+            logger.info(f"✅ User {user_id} IS member of group (status: {status})")
+        else:
+            result['group'] = False
+            logger.info(f"❌ User {user_id} NOT member of group (status: {status})")
+            
+    except telegram.error.BadRequest as e:
+        error_msg = str(e).lower()
+        if "user not found" in error_msg:
+            result['group_status'] = 'not_found'
+            logger.info(f"User {user_id} not found in group")
+        elif "chat not found" in error_msg:
+            result['group_status'] = 'chat_not_found'
+            result['error'] = f"Group {REQUIRED_GROUP} not found!"
+            logger.error(f"Group not found: {REQUIRED_GROUP}")
+        else:
+            result['group_status'] = f'error: {e}'
+            logger.warning(f"Group check BadRequest: {e}")
+        result['group'] = False
+        
+    except telegram.error.Forbidden as e:
+        result['error'] = "Bot is not admin in Group!"
+        result['group_status'] = 'bot_not_admin'
+        logger.error(f"Group Forbidden: {e}")
         return result
+        
+    except Exception as e:
+        result['group_status'] = f'error: {e}'
+        logger.error(f"Group check error: {e}")
+        result['group'] = False
+    
+    # ========== FINAL RESULT ==========
+    result['is_member'] = result['channel'] and result['group']
+    
+    # Update cache
+    verified_users[user_id] = (current_time, result)
+    
+    logger.info(f"Final result for {user_id}: channel={result['channel']}, group={result['group']}, is_member={result['is_member']}")
+    
+    return result
 
 def get_join_keyboard() -> InlineKeyboardMarkup:
     """Join buttons keyboard"""
@@ -772,6 +830,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # ============ VERIFY BUTTON ============
     if data == "verify":
+        await query.answer("🔍 Checking membership...", show_alert=True)
         # FORCE FRESH CHECK - Ignore cache completely
         check = await is_user_member(context, user_id, force_fresh=True)
         
