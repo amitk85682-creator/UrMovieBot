@@ -724,16 +724,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Ye button tumhare liye nahi hai!", show_alert=True)  
             return  
         
-        # Check membership (fresh check recommended for group actions)  
-        check = await is_user_member(context, user_id, force_fresh=True)  
-        if not check['is_member']:  
-            await query.edit_message_text(  
-                get_join_message(
-                get_join_message(check['channel'], check['group']),  
-                reply_markup=get_join_keyboard(),  
-                parse_mode='Markdown'  
-            )  
-            return  
+        # Check membership (fresh check recommended for group actions)
+check = await is_user_member(context, user_id, force_fresh=True)
+if not check['is_member']:
+    await query.edit_message_text(
+        get_join_message(check['channel'], check['group']),
+        reply_markup=get_join_keyboard(),
+        parse_mode='Markdown'
+    )
+    return  
         
         # User verified - get movie details  
         conn = get_db()  
