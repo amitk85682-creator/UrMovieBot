@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+-- coding: utf-8 --
 
 import os
 import threading
@@ -8,63 +8,81 @@ import re
 import sys
 from datetime import datetime, timedelta
 
+
 import telegram
 import psycopg2
 from typing import Optional
 from flask import Flask
 from collections import defaultdict
 
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    ConversationHandler,
-    CallbackQueryHandler
+Application,
+CommandHandler,
+MessageHandler,
+filters,
+ContextTypes,
+ConversationHandler,
+CallbackQueryHandler
 )
 from fuzzywuzzy import process, fuzz
 
-# ==================== FLASK APP ====================
+
+==================== FLASK APP ====================
+
 app = Flask(__name__)
+
 
 @app.route("/")
 def index():
     return "Ur Movie Bot is running ✅"
 
-# ==================== LOGGING ====================
+
+==================== LOGGING ====================
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ==================== STATES ====================
+
+==================== STATES ====================
+
 MAIN_MENU, SEARCHING = range(2)
 
-# ==================== CONFIG ====================
+
+==================== CONFIG ====================
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get('DATABASE_URL')
 ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', 0))
 
+
 # Force Join Config - APNE CHANNEL/GROUP ID DAALO
-REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@FilmFyBoxMoviesHD')  # Fixed: Matched with URL
-REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@FilmFyBox')  # Fixed: Corrected from '@Filmfybox002' to match URL (assuming URL had a typo)
+
+REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL_ID', '@FilmFyBoxMoviesHD')  # Corrected default
+REQUIRED_GROUP = os.environ.get('REQUIRED_GROUP_ID', '@FlimfyBox')  # Corrected default
 CHANNEL_URL = 'https://t.me/FilmFyBoxMoviesHD'
-GROUP_URL = 'https://t.me/FlimfyBox'  # Fixed: Corrected typo from 'FlimfyBox' to 'FilmFyBox'
+GROUP_URL = 'https://t.me/FlimfyBox'
+
 
 # Auto delete delay
-verified_users = {} 
+
+verified_users = {}
 VERIFICATION_CACHE_TIME = 3600  # 1 Hour (3600 seconds) tak user yaad rahega
 
+
 # Validate
+
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set")
 
-# ==================== SIMPLE MEMBERSHIP CHECK ====================
+
+==================== SIMPLE MEMBERSHIP CHECK ====================
 
 async def is_user_member(context, user_id, force_fresh=False) -> dict:
     """
@@ -72,7 +90,7 @@ async def is_user_member(context, user_id, force_fresh=False) -> dict:
     force_fresh=True tab use hoga jab user 'Verify' button dabayega.
     """
     current_time = datetime.now()
-    
+
     # 1. Check Memory (Cache) first
     if not force_fresh and user_id in verified_users:
         last_checked, cached_result = verified_users[user_id]
@@ -87,21 +105,21 @@ async def is_user_member(context, user_id, force_fresh=False) -> dict:
         'group': False,
         'error': None
     }
-    
+
     try:
         # Check Channel
         try:
             channel_member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
             result['channel'] = channel_member.status in [
                 ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER, 
-                'member', 'administrator', 'creator', 'restricted' # Restricted bhi member hota hai
+                'member', 'administrator', 'creator', 'restricted'  # Restricted bhi member hota hai
             ]
         except telegram.error.BadRequest:
             result['channel'] = False
         except telegram.error.Forbidden:
             result['error'] = "Bot Channel me Admin nahi hai!"
             return result
-            
+        
         # Check Group
         try:
             group_member = await context.bot.get_chat_member(chat_id=REQUIRED_GROUP, user_id=user_id)
@@ -129,6 +147,7 @@ async def is_user_member(context, user_id, force_fresh=False) -> dict:
         result['error'] = str(e)
         return result
 
+
 def get_join_keyboard():
     """Join buttons keyboard"""
     return InlineKeyboardMarkup([
@@ -139,6 +158,7 @@ def get_join_keyboard():
         [InlineKeyboardButton("✅ Joined Both - Verify", callback_data="verify")]
     ])
 
+
 def get_join_message(channel_status, group_status):
     """Generate join message based on what's missing"""
     if not channel_status and not group_status:
@@ -147,7 +167,7 @@ def get_join_message(channel_status, group_status):
         missing = "Channel"
     else:
         missing = "Group"
-    
+
     return (
         f"🚫 **Access Denied**\n\n"
         f"Aapne {missing} join nahi kiya hai!\n\n"
@@ -156,7 +176,8 @@ def get_join_message(channel_status, group_status):
         f"Dono join karo, phir **Verify** button dabao 👇"
     )
 
-# ==================== DATABASE ====================
+
+==================== DATABASE ====================
 
 def get_db():
     """Get database connection"""
@@ -166,6 +187,7 @@ def get_db():
         logger.error(f"DB connection error: {e}")
         return None
 
+
 def search_movies(query, limit=10):
     """Search movies in database"""
     conn = None
@@ -173,7 +195,7 @@ def search_movies(query, limit=10):
         conn = get_db()
         if not conn:
             return []
-        
+
         cur = conn.cursor()
         
         # Exact match first
@@ -215,6 +237,7 @@ def search_movies(query, limit=10):
         if conn:
             conn.close()
 
+
 def get_movie_qualities(movie_id):
     """Get all qualities for a movie"""
     conn = None
@@ -222,7 +245,7 @@ def get_movie_qualities(movie_id):
         conn = get_db()
         if not conn:
             return []
-        
+
         cur = conn.cursor()
         cur.execute("""
             SELECT quality, url, file_id, file_size
@@ -245,12 +268,14 @@ def get_movie_qualities(movie_id):
         if conn:
             conn.close()
 
-# ==================== HELPER FUNCTIONS ====================
+
+==================== HELPER FUNCTIONS ====================
 
 def is_series(title):
     """Check if title is a series"""
-    patterns = [r'S\d+\s*E\d+', r'Season\s*\d+', r'Episode\s*\d+']
+    patterns = [r'S\d+\sE\d+', r'Season\s\d+', r'Episode\s*\d+']
     return any(re.search(p, title, re.IGNORECASE) for p in patterns)
+
 
 async def auto_delete(context, chat_id, message_ids, delay=60):
     """Delete messages after delay"""
@@ -261,48 +286,51 @@ async def auto_delete(context, chat_id, message_ids, delay=60):
         except:
             pass
 
+
 def schedule_delete(context, chat_id, message_ids, delay=None):
     """Schedule auto deletion"""
     if delay is None:
-        delay = AUTO_DELETE_DELAY
+        delay = 60  # Assuming AUTO_DELETE_DELAY is 60, as it's not defined
     asyncio.create_task(auto_delete(context, chat_id, message_ids, delay))
 
-# ==================== KEYBOARDS ====================
+
+==================== KEYBOARDS ====================
 
 def movie_list_keyboard(movies, page=0, per_page=5):
     """Create movie selection keyboard"""
     start = page * per_page
     end = start + per_page
     current = movies[start:end]
-    
+
     keyboard = []
     for movie_id, title, url, file_id in current:
         emoji = "📺" if is_series(title) else "🎬"
         text = f"{emoji} {title[:35]}..." if len(title) > 35 else f"{emoji} {title}"
         keyboard.append([InlineKeyboardButton(text, callback_data=f"m_{movie_id}")])
-    
+
     # Navigation
     nav = []
     total_pages = (len(movies) + per_page - 1) // per_page
-    
+
     if page > 0:
         nav.append(InlineKeyboardButton("◀️", callback_data=f"p_{page-1}"))
     if total_pages > 1:
         nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
     if end < len(movies):
         nav.append(InlineKeyboardButton("▶️", callback_data=f"p_{page+1}"))
-    
+
     if nav:
         keyboard.append(nav)
-    
+
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
-    
+
     return InlineKeyboardMarkup(keyboard)
+
 
 def quality_keyboard(movie_id, qualities):
     """Create quality selection keyboard"""
     icons = {'4K': '💎', 'HD Quality': '🔷', 'Standard Quality': '🟢', 'Low Quality': '🟡'}
-    
+
     keyboard = []
     for quality, url, file_id, size in qualities:
         icon = icons.get(quality, '🎬')
@@ -311,17 +339,18 @@ def quality_keyboard(movie_id, qualities):
             f"{icon} {quality}{size_text}",
             callback_data=f"q_{movie_id}_{quality}"
         )])
-    
+
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
-    
+
     return InlineKeyboardMarkup(keyboard)
 
-# ==================== SEND MOVIE ====================
+
+==================== SEND MOVIE ====================
 
 async def send_movie(update, context, movie_id, title, url=None, file_id=None):
     """Send movie file to user"""
     chat_id = update.effective_chat.id
-    
+
     # If no direct file, check qualities
     if not url and not file_id:
         qualities = get_movie_qualities(movie_id)
@@ -335,7 +364,7 @@ async def send_movie(update, context, movie_id, title, url=None, file_id=None):
             )
             schedule_delete(context, chat_id, [msg.message_id], 300)
             return
-    
+
     try:
         # Warning message
         warn = await context.bot.send_message(
@@ -407,13 +436,14 @@ async def send_movie(update, context, movie_id, title, url=None, file_id=None):
         logger.error(f"Send movie error: {e}")
         await context.bot.send_message(chat_id=chat_id, text="❌ File send nahi ho paya!")
 
-# ==================== HANDLERS ====================
+
+==================== HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
+
     # Handle deep links
     if context.args:
         arg = context.args[0]
@@ -470,10 +500,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Process search
             context.user_data['query'] = query
             return await process_search(update, context, query)
-    
+
     # Normal start - show welcome
     bot = await context.bot.get_me()
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot.username}?startgroup=true")],
         [
@@ -481,37 +511,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("💬 Group", url=GROUP_URL)
         ]
     ])
-    
+
     welcome = (
         "🎬 **Ur Movie Bot**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "Movie ya Series ka naam type karo!\n\n"
         "Example: `Avengers Endgame`"
     )
-    
+
     await update.message.reply_text(welcome, reply_markup=keyboard, parse_mode='Markdown')
     return MAIN_MENU
+
 
 async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None):
     """Process movie search"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
+
     if not query:
         if not update.message or not update.message.text:
             return MAIN_MENU
         query = update.message.text.strip()
-    
+
     if len(query) < 2:
         return MAIN_MENU
-    
+
     # ============ MEMBERSHIP CHECK ============
     check = await is_user_member(context, user_id)
-    
+
     if check['error']:
         await update.message.reply_text(f"⚠️ Error: {check['error']}")
         return MAIN_MENU
-    
+
     if not check['is_member']:
         msg = await update.message.reply_text(
             get_join_message(check['channel'], check['group']),
@@ -521,47 +552,51 @@ async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, que
         schedule_delete(context, chat_id, [msg.message_id], 120)
         return MAIN_MENU
     # ==========================================
-    
+
     # User is member - search movies
     movies = search_movies(query)
-    
+
     if not movies:
         await update.message.reply_text(
             f"😕 `{query}` nahi mila!\n\nKuch aur search karo.",
             parse_mode='Markdown'
         )
         return MAIN_MENU
-    
+
     if len(movies) == 1:
         # Single result - send directly
         m = movies[0]
         await send_movie(update, context, m[0], m[1], m[2], m[3])
         return MAIN_MENU
-    
+
     # Multiple results - show list
     context.user_data['results'] = movies
     context.user_data['query'] = query
-    
+
     await update.message.reply_text(
         f"🔍 **{len(movies)} results** for `{query}`\n\nSelect karo:",
         reply_markup=movie_list_keyboard(movies),
         parse_mode='Markdown'
     )
 
+    return MAIN_MENU
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages"""
     return await process_search(update, context)
+
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
     query = update.callback_query
     await query.answer()
-    
+
+    user_id = query.from_user
     user_id = query.from_user.id
     chat_id = query.message.chat.id
     data = query.data
-    
-    # ============ VERIFY BUTTON ============
+
     # ============ VERIFY BUTTON ============
     if data == "verify":
         # Yahan hum 'force_fresh=True' bhejenge taaki cache ignore kare aur naya check kare
@@ -588,7 +623,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Agar message same hai to error aata hai, usse ignore karo aur popup dikhao
                 await query.answer("❌ Abhi bhi join nahi kiya! Dobara check karein.", show_alert=True)
         return
-    
+
     # ============ MOVIE SELECTION ============
     if data.startswith("m_"):
         # Check membership
@@ -633,7 +668,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_movie(update, context, movie[0], movie[1], movie[2], movie[3])
         
         return
-    
+
     # ============ QUALITY SELECTION ============
     if data.startswith("q_"):
         # Check membership
@@ -668,7 +703,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"📤 Sending **{title}**...", parse_mode='Markdown')
         await send_movie(update, context, movie_id, title, url, file_id)
         return
-    
+
     # ============ PAGINATION ============
     if data.startswith("p_"):
         page = int(data[2:])
@@ -682,13 +717,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
         return
-    
+
     # ============ CANCEL ============
     if data == "cancel":
         await query.edit_message_text("❌ Cancelled")
         schedule_delete(context, chat_id, [query.message.message_id], 5)
         return
-    
+
     # ============ GROUP GET ============
     if data.startswith("g_"):
         parts = data.split("_")
@@ -758,36 +793,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         return
 
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle group messages"""
     if not update.message or not update.message.text:
         return
-    
+
     text = update.message.text.strip()
     user = update.effective_user
-    
+
     if len(text) < 4 or text.startswith('/'):
         return
-    
+
     # Search
     movies = search_movies(text, limit=1)
-    
+
     if not movies:
         return
-    
+
     movie_id, title, _, _ = movies[0]
-    
+
     # Check similarity
     score = fuzz.token_sort_ratio(text.lower(), title.lower())
     if score < 85:
         return
-    
+
     emoji = "📺" if is_series(title) else "🎬"
-    
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"✅ Get {emoji}", callback_data=f"g_{movie_id}_{user.id}")
     ]])
-    
+
     msg = await update.message.reply_text(
         f"Hey {user.mention_markdown()}!\n\n"
         f"{emoji} **{title}**\n\n"
@@ -795,31 +831,34 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=keyboard,
         parse_mode='Markdown'
     )
-    
+
     schedule_delete(context, update.effective_chat.id, [msg.message_id], 120)
+
 
 async def error_handler(update, context):
     """Handle errors"""
     logger.error(f"Error: {context.error}")
 
-# ==================== MAIN ====================
+
+==================== MAIN ====================
 
 def run_flask():
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
 
+
 def main():
     logger.info("🚀 Starting Bot...")
     logger.info(f"Channel: {REQUIRED_CHANNEL}")
     logger.info(f"Group: {REQUIRED_GROUP}")
-    
+
     # Flask thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
+
     # Bot
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     # Handlers
     conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -830,7 +869,7 @@ def main():
         per_message=False,
         per_chat=True
     )
-    
+
     application.add_handler(conv)
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(
@@ -838,9 +877,10 @@ def main():
         handle_group_message
     ))
     application.add_error_handler(error_handler)
-    
+
     logger.info("✅ Bot Ready!")
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
