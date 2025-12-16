@@ -275,7 +275,7 @@ def get_join_message(channel_status: bool, group_status: bool) -> str:
 
 # ==================== DATABASE FUNCTIONS ====================
 def search_movies(query: str, limit: int = 10) -> List[Tuple]:
-    """Search movies in database (Supports Aliases)"""
+    """Search movies in database: Checks Title AND Aliases with Smart Matching"""
     conn = None
     try:
         conn = get_db()
@@ -284,27 +284,38 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
         
         cur = conn.cursor()
         
-        # 👇 UPDATE: Ab ye Aliases table bhi check karega
-        # DISTINCT lagaya hai taki duplicate results na aayein
+        # 👇 MAGIC LOGIC: Spaces ko '%' se replace kar rahe hain
+        # Agar query "IT Season 1" hai, to ye ban jayega "%IT%Season%1%"
+        # Isse "IT Welcome to Derry Season 1 Combined" bhi pakad me aa jayega.
+        flexible_query = query.strip().replace(" ", "%")
+        search_term = f'%{flexible_query}%'
+        
+        # 👇 SQL QUERY UPDATE
+        # Hum 'DISTINCT' use kar rahe hain taaki agar Title aur Alias dono match karein
+        # to result do baar na aaye.
         sql_query = """
             SELECT DISTINCT m.id, m.title, m.url, m.file_id 
             FROM movies m
             LEFT JOIN movie_aliases ma ON m.id = ma.movie_id
-            WHERE LOWER(m.title) LIKE LOWER(%s) OR LOWER(ma.alias) LIKE LOWER(%s)
+            WHERE 
+                m.title ILIKE %s OR 
+                ma.alias ILIKE %s
             ORDER BY m.title 
             LIMIT %s
         """
-        search_term = f'%{query}%'
-        cur.execute(sql_query, (search_term, search_term, limit))
         
+        # Hum same search term dono jagah (Title aur Alias) me daal rahe hain
+        cur.execute(sql_query, (search_term, search_term, limit))
         results = cur.fetchall()
         
-        # Agar SQL search se mil gaya to wahi return karo
+        # Agar SQL se result mil gaya (sabse fast aur accurate)
         if results:
             cur.close()
             return results
-        
-        # 👇 Fuzzy Search me bhi sudhar (Optional backup)
+
+        # 👇 Fallback: Fuzzy Search (Agar SQL fail ho jaye to)
+        # Note: Fuzzy search Aliases par lagana bhari pad sakta hai, 
+        # isliye filhal hum sirf Main Title par fuzzy laga rahe hain.
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
         cur.close()
@@ -313,11 +324,12 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
             return []
         
         titles = [m[1] for m in all_movies]
+        # Token Sort Ratio best hai kyunki ye words ka order idhar-udhar hone par bhi match karta hai
         matches = process.extract(query, titles, scorer=fuzz.token_sort_ratio, limit=limit)
         
         filtered = []
         for match in matches:
-            if match[1] >= 60:
+            if match[1] >= 50: # Score 50 rakha hai taaki typos handle ho sakein
                 for movie in all_movies:
                     if movie[1] == match[0]:
                         filtered.append(movie)
