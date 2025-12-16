@@ -275,7 +275,7 @@ def get_join_message(channel_status: bool, group_status: bool) -> str:
 
 # ==================== DATABASE FUNCTIONS ====================
 def search_movies(query: str, limit: int = 10) -> List[Tuple]:
-    """Search movies in database"""
+    """Search movies in database (Supports Aliases)"""
     conn = None
     try:
         conn = get_db()
@@ -284,18 +284,27 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
         
         cur = conn.cursor()
         
-        # Exact match first
-        cur.execute(
-            "SELECT id, title, url, file_id FROM movies WHERE LOWER(title) LIKE LOWER(%s) ORDER BY title LIMIT %s",
-            (f'%{query}%', limit)
-        )
+        # 👇 UPDATE: Ab ye Aliases table bhi check karega
+        # DISTINCT lagaya hai taki duplicate results na aayein
+        sql_query = """
+            SELECT DISTINCT m.id, m.title, m.url, m.file_id 
+            FROM movies m
+            LEFT JOIN movie_aliases ma ON m.id = ma.movie_id
+            WHERE LOWER(m.title) LIKE LOWER(%s) OR LOWER(ma.alias) LIKE LOWER(%s)
+            ORDER BY m.title 
+            LIMIT %s
+        """
+        search_term = f'%{query}%'
+        cur.execute(sql_query, (search_term, search_term, limit))
+        
         results = cur.fetchall()
         
+        # Agar SQL search se mil gaya to wahi return karo
         if results:
             cur.close()
             return results
         
-        # Fuzzy search
+        # 👇 Fuzzy Search me bhi sudhar (Optional backup)
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
         cur.close()
