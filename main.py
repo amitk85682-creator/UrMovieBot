@@ -5,7 +5,6 @@ import asyncio
 import logging
 import re
 import sys
-FORCE_JOIN_ENABLED = True
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 
@@ -142,16 +141,6 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         'creator'
     ]
     
-    # ❌ INVALID STATUSES - Not members
-    INVALID_STATUSES = [
-        ChatMember.LEFT,
-        ChatMember.BANNED,
-        ChatMember.RESTRICTED,  # Restricted = NOT a member
-        'left',
-        'kicked',
-        'restricted'
-    ]
-    
     # ========== CHECK CHANNEL ==========
     try:
         channel_member = await context.bot.get_chat_member(
@@ -164,31 +153,9 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         # Check if valid member
         if status in VALID_MEMBER_STATUSES:
             result['channel'] = True
-            logger.info(f"✅ User {user_id} IS member of channel (status: {status})")
         else:
             result['channel'] = False
-            logger.info(f"❌ User {user_id} NOT member of channel (status: {status})")
             
-    except telegram.error.BadRequest as e:
-        error_msg = str(e).lower()
-        if "user not found" in error_msg:
-            result['channel_status'] = 'not_found'
-            logger.info(f"User {user_id} not found in channel")
-        elif "chat not found" in error_msg:
-            result['channel_status'] = 'chat_not_found'
-            result['error'] = f"Channel {REQUIRED_CHANNEL} not found!"
-            logger.error(f"Channel not found: {REQUIRED_CHANNEL}")
-        else:
-            result['channel_status'] = f'error: {e}'
-            logger.warning(f"Channel check BadRequest: {e}")
-        result['channel'] = False
-        
-    except telegram.error.Forbidden as e:
-        result['error'] = "Bot is not admin in Channel!"
-        result['channel_status'] = 'bot_not_admin'
-        logger.error(f"Channel Forbidden: {e}")
-        return result
-        
     except Exception as e:
         result['channel_status'] = f'error: {e}'
         logger.error(f"Channel check error: {e}")
@@ -206,31 +173,9 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         # Check if valid member
         if status in VALID_MEMBER_STATUSES:
             result['group'] = True
-            logger.info(f"✅ User {user_id} IS member of group (status: {status})")
         else:
             result['group'] = False
-            logger.info(f"❌ User {user_id} NOT member of group (status: {status})")
             
-    except telegram.error.BadRequest as e:
-        error_msg = str(e).lower()
-        if "user not found" in error_msg:
-            result['group_status'] = 'not_found'
-            logger.info(f"User {user_id} not found in group")
-        elif "chat not found" in error_msg:
-            result['group_status'] = 'chat_not_found'
-            result['error'] = f"Group {REQUIRED_GROUP} not found!"
-            logger.error(f"Group not found: {REQUIRED_GROUP}")
-        else:
-            result['group_status'] = f'error: {e}'
-            logger.warning(f"Group check BadRequest: {e}")
-        result['group'] = False
-        
-    except telegram.error.Forbidden as e:
-        result['error'] = "Bot is not admin in Group!"
-        result['group_status'] = 'bot_not_admin'
-        logger.error(f"Group Forbidden: {e}")
-        return result
-        
     except Exception as e:
         result['group_status'] = f'error: {e}'
         logger.error(f"Group check error: {e}")
@@ -241,8 +186,6 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
     
     # Update cache
     verified_users[user_id] = (current_time, result)
-    
-    logger.info(f"Final result for {user_id}: channel={result['channel']}, group={result['group']}, is_member={result['is_member']}")
     
     return result
 
@@ -275,7 +218,7 @@ def get_join_message(channel_status: bool, group_status: bool) -> str:
 
 # ==================== DATABASE FUNCTIONS ====================
 def search_movies(query: str, limit: int = 10) -> List[Tuple]:
-    """Search movies in database: Checks Title AND Aliases with Smart Matching"""
+    """Search movies in database: Checks Title AND Aliases"""
     conn = None
     try:
         conn = get_db()
@@ -284,15 +227,9 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
         
         cur = conn.cursor()
         
-        # 👇 MAGIC LOGIC: Spaces ko '%' se replace kar rahe hain
-        # Agar query "IT Season 1" hai, to ye ban jayega "%IT%Season%1%"
-        # Isse "IT Welcome to Derry Season 1 Combined" bhi pakad me aa jayega.
         flexible_query = query.strip().replace(" ", "%")
         search_term = f'%{flexible_query}%'
         
-        # 👇 SQL QUERY UPDATE
-        # Hum 'DISTINCT' use kar rahe hain taaki agar Title aur Alias dono match karein
-        # to result do baar na aaye.
         sql_query = """
             SELECT DISTINCT m.id, m.title, m.url, m.file_id 
             FROM movies m
@@ -304,18 +241,14 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
             LIMIT %s
         """
         
-        # Hum same search term dono jagah (Title aur Alias) me daal rahe hain
         cur.execute(sql_query, (search_term, search_term, limit))
         results = cur.fetchall()
         
-        # Agar SQL se result mil gaya (sabse fast aur accurate)
         if results:
             cur.close()
             return results
 
-        # 👇 Fallback: Fuzzy Search (Agar SQL fail ho jaye to)
-        # Note: Fuzzy search Aliases par lagana bhari pad sakta hai, 
-        # isliye filhal hum sirf Main Title par fuzzy laga rahe hain.
+        # Fallback: Fuzzy Search
         cur.execute("SELECT id, title, url, file_id FROM movies")
         all_movies = cur.fetchall()
         cur.close()
@@ -324,12 +257,11 @@ def search_movies(query: str, limit: int = 10) -> List[Tuple]:
             return []
         
         titles = [m[1] for m in all_movies]
-        # Token Sort Ratio best hai kyunki ye words ka order idhar-udhar hone par bhi match karta hai
         matches = process.extract(query, titles, scorer=fuzz.token_sort_ratio, limit=limit)
         
         filtered = []
         for match in matches:
-            if match[1] >= 50: # Score 50 rakha hai taaki typos handle ho sakein
+            if match[1] >= 50:
                 for movie in all_movies:
                     if movie[1] == match[0]:
                         filtered.append(movie)
@@ -364,8 +296,9 @@ def get_movie_by_id(movie_id: int) -> Optional[Tuple]:
         if conn:
             release_db(conn)
 
+# 👇 UPDATED FUNCTION FOR BATCH SUPPORT 👇
 def get_movie_qualities(movie_id: int) -> List[Tuple]:
-    """Get all qualities for a movie"""
+    """Get all qualities for a movie (Updated for Batch)"""
     conn = None
     try:
         conn = get_db()
@@ -373,16 +306,12 @@ def get_movie_qualities(movie_id: int) -> List[Tuple]:
             return []
         
         cur = conn.cursor()
+        # Simply get files, sorted by ID desc to show newest first
         cur.execute("""
             SELECT quality, url, file_id, file_size
             FROM movie_files
             WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
-            ORDER BY CASE quality
-                WHEN '4K' THEN 1
-                WHEN 'HD Quality' THEN 2
-                WHEN 'Standard Quality' THEN 3
-                ELSE 4
-            END
+            ORDER BY id DESC
         """, (movie_id,))
         results = cur.fetchall()
         cur.close()
@@ -426,9 +355,8 @@ async def safe_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, 
     """Safely delete a message"""
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except telegram.error.BadRequest as e:
-        if "Message to delete not found" not in str(e):
-            logger.warning(f"Could not delete message {message_id}: {e}")
+    except telegram.error.BadRequest:
+        pass
     except Exception as e:
         logger.error(f"Delete message error: {e}")
 
@@ -476,25 +404,31 @@ def movie_list_keyboard(movies: List[Tuple], page: int = 0, per_page: int = 5) -
     
     return InlineKeyboardMarkup(keyboard)
 
+# 👇 UPDATED FUNCTION FOR SMART BUTTONS 👇
 def quality_keyboard(movie_id: int, qualities: List[Tuple]) -> InlineKeyboardMarkup:
-    """Create quality selection keyboard"""
-    icons = {
-        '4K': '💎',
-        '2K': '🔶',
-        'HD Quality': '🔷',
-        '1080p': '🔷',
-        '720p': '🟢',
-        'Standard Quality': '🟢',
-        '480p': '🟡',
-        'Low Quality': '🟡'
-    }
-    
+    """Create quality selection keyboard with Smart Label Logic"""
     keyboard = []
+    
     for quality, url, file_id, size in qualities:
-        icon = icons.get(quality, '🎬')
-        size_text = f" ({size})" if size else ""
+        # Icons logic
+        icon = '🎬'
+        q_lower = quality.lower()
+        if '4k' in q_lower: icon = '💎'
+        elif '1080p' in q_lower: icon = '🔷'
+        elif '720p' in q_lower: icon = '🟢'
+        elif '480p' in q_lower: icon = '🟡'
+
+        # 👇 SMART LOGIC: Double Size Fix
+        # Agar quality string me pehle se '[' aur ']' hai (Batch Upload), to size mat jodo
+        if "[" in quality and "]" in quality:
+            display_text = f"{icon} {quality}"
+        else:
+            # Purane data/Web panel ke liye size jodo
+            size_text = f" ({size})" if size else ""
+            display_text = f"{icon} {quality}{size_text}"
+
         keyboard.append([InlineKeyboardButton(
-            f"{icon} {quality}{size_text}",
+            display_text,
             callback_data=f"q_{movie_id}_{quality}"
         )])
     
