@@ -1313,7 +1313,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== GROUP MENTION HANDLER ====================
 async def handle_group_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle when bot is mentioned in group"""
+    """Handle messages in group (Updated to read all text)"""
     if not update.message or not update.message.text:
         return
     
@@ -1321,39 +1321,41 @@ async def handle_group_mention(update: Update, context: ContextTypes.DEFAULT_TYP
     bot = await context.bot.get_me()
     bot_username = bot.username
     
+    # --- OLD CODE (Jisko hata diya) ---
     # Check if bot is mentioned
-    if f"@{bot_username}" not in text:
+    # if f"@{bot_username}" not in text:
+    #    return
+    # query = text.replace(f"@{bot_username}", "").strip()
+    # ----------------------------------
+
+    # --- NEW LOGIC (Direct Search) ---
+    # Agar message / se start hota hai to ignore karo (commands alag handle honge)
+    if text.startswith('/'):
         return
-    
-    # Extract movie name (remove bot mention)
+
+    # Agar user ne tag kiya hai to tag hata do, nahi to pura text lelo
     query = text.replace(f"@{bot_username}", "").strip()
     
     if len(query) < 2:
-        await update.message.reply_text(
-            f"🎬 Type movie name after mentioning me!\n"
-            f"Example: `@{bot_username} Avengers`",
-            parse_mode='Markdown'
-        )
+        # Chote messages ko ignore karo taaki spam na ho
         return
     
     user_id = update.effective_user.id
     
-    # Search movies
+    # Search movies directly
     movies = search_movies(query)
     
     if not movies:
-        await update.message.reply_text(
-            f"😕 `{query}` not found!",
-            parse_mode='Markdown'
-        )
+        # Agar movie nahi mili to group me shor mat machao (Silent return)
+        # Kyunki log aapas me baat kar rahe honge
         return
     
     if len(movies) == 1:
         # Single result - send button to get in DM
         movie = movies[0]
-        keyboard = InlineKeyboardMarkup([[
+        keyboard = InlineKeyboardMarkup([[ 
             InlineKeyboardButton(
-                "📥 Get in DM",
+                "📥 Get in DM", 
                 callback_data=f"g_{movie[0]}_{user_id}"
             )
         ]])
@@ -1369,9 +1371,9 @@ async def handle_group_mention(update: Update, context: ContextTypes.DEFAULT_TYP
         # Multiple results - send deep link
         deep_link = f"https://t.me/{bot_username}?start=q_{query.replace(' ', '_')}"
         
-        keyboard = InlineKeyboardMarkup([[
+        keyboard = InlineKeyboardMarkup([[ 
             InlineKeyboardButton(
-                f"📋 View {len(movies)} Results",
+                f"📋 View {len(movies)} Results", 
                 url=deep_link
             )
         ]])
