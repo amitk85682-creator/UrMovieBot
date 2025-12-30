@@ -106,6 +106,50 @@ def release_db(conn):
         except Exception as e:
             logger.error(f"Error releasing connection: {e}")
 
+# 👇👇👇 IS FUNCTION KO 'get_movie_by_id' KE NEECHE PASTE KARO 👇👇👇
+
+def get_movies_fast_sql(query: str, limit: int = 5) -> List[Tuple]:
+    """
+    Smart SQL Search: Fast like SQL + Smart like FuzzyWuzzy.
+    Handles typos using PostgreSQL 'pg_trgm' (Similarity).
+    """
+    conn = None
+    try:
+        conn = get_db() # Is script me connection pool use ho raha hai
+        if not conn:
+            return []
+
+        cur = conn.cursor()
+        
+        # 1. Ensure Extension Enabled
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+        
+        # 2. Smart Query (SIMILARITY > 0.3)
+        sql = """
+            SELECT m.id, m.title, m.url, m.file_id, 
+                   SIMILARITY(m.title, %s) as sim_score
+            FROM movies m
+            WHERE SIMILARITY(m.title, %s) > 0.3
+            ORDER BY sim_score DESC
+            LIMIT %s
+        """
+        
+        cur.execute(sql, (query, query, limit))
+        results = cur.fetchall()
+        
+        # Format results: (id, title, url, file_id) - Score hata rahe hain return ke liye
+        final_results = [(r[0], r[1], r[2], r[3]) for r in results]
+        
+        cur.close()
+        return final_results
+
+    except Exception as e:
+        logger.error(f"Smart SQL Search Error: {e}")
+        return []
+    finally:
+        if conn:
+            release_db(conn) # Connection pool me wapis
+
 # ==================== MEMBERSHIP CHECK (FIXED) ====================
 async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Dict[str, Any]:
     """Check if user is member of channel and group"""
@@ -1312,64 +1356,73 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 # ==================== GROUP MENTION HANDLER ====================
-async def handle_group_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages in group (Updated to read all text)"""
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle messages in groups using FAST SQL Search.
+    Agar movie database me hai to reply karega, nahi to chup rahega.
+    """
+    # 1. Basic Validation
     if not update.message or not update.message.text:
         return
     
-    text = update.message.text
+    text = update.message.text.strip()
     bot = await context.bot.get_me()
     bot_username = bot.username
     
-    # --- OLD CODE (Jisko hata diya) ---
-    # Check if bot is mentioned
-    # if f"@{bot_username}" not in text:
-    #    return
-    # query = text.replace(f"@{bot_username}", "").strip()
-    # ----------------------------------
-
-    # --- NEW LOGIC (Direct Search) ---
-    # Agar message / se start hota hai to ignore karo (commands alag handle honge)
+    # 2. Commands ignore karo
     if text.startswith('/'):
         return
 
-    # Agar user ne tag kiya hai to tag hata do, nahi to pura text lelo
-    query = text.replace(f"@{bot_username}", "").strip()
+    # 3. Agar user ne tag kiya hai to tag hata do
+    if f"@{bot_username}" in text:
+        text = text.replace(f"@{bot_username}", "").strip()
     
-    if len(query) < 2:
-        # Chote messages ko ignore karo taaki spam na ho
+    # 4. Bahut chote words ignore karo
+    if len(text) < 2:
         return
-    
-    user_id = update.effective_user.id
-    
-    # Search movies directly
-    movies = search_movies(query)
-    
+
+    # 5. 🚀 FAST SEARCH CALL (Sirf SQL Check - No Python Lag)
+    # Hum 10 results maang rahe hain check karne ke liye
+    movies = get_movies_fast_sql(text, limit=10)
+
     if not movies:
-        # Agar movie nahi mili to group me shor mat machao (Silent return)
-        # Kyunki log aapas me baat kar rahe honge
+        # 🤫 Agar movie nahi mili, to YAHIN RUK JAO. (Silent Mode)
+        # Bot kuch reply nahi karega, group me shanti rahegi.
         return
-    
+
+    # 6. Result Handling
+    user_id = update.effective_user.id
+
     if len(movies) == 1:
-        # Single result - send button to get in DM
+        # --- Case A: Single Result (Direct Button) ---
         movie = movies[0]
+        # Movie Tuple: (id, title, url, file_id)
+        movie_id = movie[0]
+        movie_title = movie[1]
+
         keyboard = InlineKeyboardMarkup([[ 
             InlineKeyboardButton(
                 "📥 Get in DM", 
-                callback_data=f"g_{movie[0]}_{user_id}"
+                callback_data=f"g_{movie_id}_{user_id}"
             )
         ]])
         
-        emoji = "📺" if is_series(movie[1]) else "🎬"
+        # Series check (Safe method)
+        is_series_bool = is_series(movie_title) if 'is_series' in globals() else False
+        emoji = "📺" if is_series_bool else "🎬"
+
         await update.message.reply_text(
-            f"{emoji} **{movie[1]}**\n\n"
+            f"{emoji} **{movie_title}**\n\n"
             f"Click to get in your DM! 👇",
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
+
     else:
-        # Multiple results - send deep link
-        deep_link = f"https://t.me/{bot_username}?start=q_{query.replace(' ', '_')}"
+        # --- Case B: Multiple Results (Deep Link) ---
+        # Deep link banayenge taaki group me spam na ho
+        safe_query = text.replace(' ', '_')
+        deep_link = f"https://t.me/{bot_username}?start=q_{safe_query}"
         
         keyboard = InlineKeyboardMarkup([[ 
             InlineKeyboardButton(
@@ -1379,7 +1432,7 @@ async def handle_group_mention(update: Update, context: ContextTypes.DEFAULT_TYP
         ]])
         
         await update.message.reply_text(
-            f"🔍 Found **{len(movies)} movies** for `{query}`\n\n"
+            f"🔍 Found **{len(movies)} movies** for `{text}`\n\n"
             f"Click to select! 👇",
             reply_markup=keyboard,
             parse_mode='Markdown'
@@ -1448,7 +1501,7 @@ def main():
     # Group mention handler
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
-        handle_group_mention
+        handle_group_message
     ))
     
     # Standalone callback handler for non-conversation callbacks
