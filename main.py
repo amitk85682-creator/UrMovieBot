@@ -1382,21 +1382,18 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # 5. 🚀 FAST SEARCH CALL (Sirf SQL Check - No Python Lag)
-    # Hum 10 results maang rahe hain check karne ke liye
     movies = get_movies_fast_sql(text, limit=10)
 
     if not movies:
-        # 🤫 Agar movie nahi mili, to YAHIN RUK JAO. (Silent Mode)
-        # Bot kuch reply nahi karega, group me shanti rahegi.
         return
 
     # 6. Result Handling
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id  # Chat ID capture kiya
 
     if len(movies) == 1:
         # --- Case A: Single Result (Direct Button) ---
         movie = movies[0]
-        # Movie Tuple: (id, title, url, file_id)
         movie_id = movie[0]
         movie_title = movie[1]
 
@@ -1407,20 +1404,23 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         ]])
         
-        # Series check (Safe method)
         is_series_bool = is_series(movie_title) if 'is_series' in globals() else False
         emoji = "📺" if is_series_bool else "🎬"
 
-        await update.message.reply_text(
+        # 👇 CHANGE 1: Message ko variable 'sent_msg' me store kiya
+        sent_msg = await update.message.reply_text(
             f"{emoji} **{movie_title}**\n\n"
             f"Click to get in your DM! 👇",
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
+        
+        # 👇 CHANGE 2: Auto Delete schedule kiya (e.g., 60 seconds)
+        # Agar user ka message bhi delete karna hai to list me update.message.message_id bhi add karein
+        schedule_delete(context, chat_id, [sent_msg.message_id], delay=60)
 
     else:
         # --- Case B: Multiple Results (Deep Link) ---
-        # Deep link banayenge taaki group me spam na ho
         safe_query = text.replace(' ', '_')
         deep_link = f"https://t.me/{bot_username}?start=q_{safe_query}"
         
@@ -1431,13 +1431,16 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         ]])
         
-        await update.message.reply_text(
+        # 👇 CHANGE 3: Message ko variable 'sent_msg' me store kiya
+        sent_msg = await update.message.reply_text(
             f"🔍 Found **{len(movies)} movies** for `{text}`\n\n"
             f"Click to select! 👇",
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
 
+        # 👇 CHANGE 4: Auto Delete schedule kiya
+        schedule_delete(context, chat_id, [sent_msg.message_id], delay=60)
 # ==================== MAIN BOT SETUP ====================
 def main():
     """Start the bot"""
