@@ -461,44 +461,64 @@ def movie_list_keyboard(movies: List[Tuple], page: int = 0, per_page: int = 5) -
     return InlineKeyboardMarkup(keyboard)
 # 👇 UPDATED FUNCTION FOR SMART BUTTONS 👇
 def quality_keyboard(movie_id: int, qualities: List[Tuple]) -> InlineKeyboardMarkup:
-    """Create quality selection keyboard with Smart Label Logic"""
+    """
+    Create quality selection keyboard (FilmFyBox Style)
+    - Grid Layout (2 per row)
+    - Send All Button
+    - Size Display
+    """
     keyboard = []
-    
-    for quality, url, file_id, size in qualities:
-        # Icons logic
-        icon = '🎬'
-        q_lower = quality.lower()
-        if '4k' in q_lower: icon = '💎'
-        elif '1080p' in q_lower: icon = '🔷'
-        elif '720p' in q_lower: icon = '🟢'
-        elif '480p' in q_lower: icon = '🟡'
 
-        # 👇 SMART LOGIC: Double Size Fix
-        # Agar quality string me pehle se '[' aur ']' hai (Batch Upload), to size mat jodo
-        if "[" in quality and "]" in quality:
-            display_text = f"{icon} {quality}"
-        else:
-            # Purane data/Web panel ke liye size jodo
-            size_text = f" ({size})" if size else ""
-            display_text = f"{icon} {quality}{size_text}"
+    # 1. SEND ALL BUTTON (Top)
+    keyboard.append([InlineKeyboardButton("🚀 SEND ALL FILES", callback_data=f"sendall_{movie_id}")])
 
-        keyboard.append([InlineKeyboardButton(
-            display_text,
-            callback_data=f"q_{movie_id}_{quality}"
-        )])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
-    
+    # 2. GRID LAYOUT (2 Buttons per Row)
+    row = []
+    for quality, url, file_id, file_size in qualities:
+        # Callback Data
+        callback_data = f"q_{movie_id}_{quality}"
+        
+        # Button Text: 📁 720p [1.2GB]
+        size_str = f"[{file_size}]" if file_size else ""
+        icon = "📁" if file_id else "🔗"
+        button_text = f"{icon} {quality} {size_str}"
+        
+        row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+
+        # Agar row me 2 button ho gaye, to keyboard me daalo aur row khali karo
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    # Agar koi akela button bacha hai
+    if row:
+        keyboard.append(row)
+
+    # 3. Bottom Buttons
+    keyboard.append([InlineKeyboardButton("❌ Cancel Selection", callback_data="cancel")])
+
     return InlineKeyboardMarkup(keyboard)
+def get_promo_buttons(url_link=None) -> InlineKeyboardMarkup:
+    """Get promotional buttons (FilmFyBox Style)"""
+    buttons = []
+    
+    # Row 1: Watch & Download (Agar link available hai)
+    row1 = []
+    if url_link and "http" in url_link:
+        row1.append(InlineKeyboardButton("🎬 Watch Now", url=url_link))
+        row1.append(InlineKeyboardButton("📥 Download", url=url_link))
+    else:
+        # Agar link nahi hai to sirf Download button (channel link ke sath)
+        row1.append(InlineKeyboardButton("📥 Download", url=CHANNEL_URL))
 
-def get_promo_buttons() -> InlineKeyboardMarkup:
-    """Get promotional buttons"""
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📢 Channel", url=CHANNEL_URL),
-        InlineKeyboardButton("💬 Group", url=GROUP_URL)
-    ]])
+    buttons.append(row1)
 
+    # Row 2: Join Channel
+    buttons.append([
+        InlineKeyboardButton("➡️ Join Channel", url=CHANNEL_URL)
+    ])
+    
+    return InlineKeyboardMarkup(buttons)
 # ==================== SEND MOVIE ====================
 async def send_movie(
     update: Update,
@@ -550,7 +570,7 @@ async def send_movie(
             f"⏰ Auto-delete: 60 sec"
         )
         
-        buttons = get_promo_buttons()
+        buttons = get_promo_buttons(url)
         
         sent = None
         
@@ -635,37 +655,43 @@ async def send_movie(
 
 # ==================== HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start command handler"""
+    """Start command handler with Pending Request Save"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     
     # Log user activity
     log_user_activity(user_id, 'start', 'Bot started')
     
-    # Handle deep links
+    # 1. Check Membership FIRST
+    force_refresh = True if context.args else False
+    check = await is_user_member(context, user_id, force_fresh=force_refresh)
+
+    # 2. Agar Member NAHI hai -> Link Save karo & Join Button dikhao
+    if not check['is_member']:
+        # AGAR DEEP LINK HAI TO SAVE KARO
+        if context.args:
+            context.user_data['pending_start_args'] = context.args
+        
+        msg = await update.message.reply_text(
+            get_join_message(check['channel'], check['group']),
+            reply_markup=get_join_keyboard(),
+            parse_mode='Markdown'
+        )
+        schedule_delete(context, chat_id, [msg.message_id], 120)
+        return MAIN_MENU
+
+    # 3. Agar Member HAI -> Process Deep Link
     if context.args:
         arg = context.args[0]
         
         # Movie link: /start movie_123
         if arg.startswith("movie_"):
-            # Check membership FIRST (fresh check)
-            check = await is_user_member(context, user_id, force_fresh=True)
-            
-            if not check['is_member']:
-                msg = await update.message.reply_text(
-                    get_join_message(check['channel'], check['group']),
-                    reply_markup=get_join_keyboard(),
-                    parse_mode='Markdown'
-                )
-                schedule_delete(context, chat_id, [msg.message_id], 120)
-                return MAIN_MENU
-            
-            # User is member, get movie
             try:
                 movie_id = int(arg.split('_')[1])
                 movie = get_movie_by_id(movie_id)
                 
                 if movie:
+                    # Movie Bhejo
                     await send_movie(update, context, movie[0], movie[1], movie[2], movie[3])
                 else:
                     await update.message.reply_text("❌ Movie not found!")
@@ -678,27 +704,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Search link: /start q_Movie_Name
         if arg.startswith("q_"):
             query = arg[2:].replace("_", " ")
-            
-            # Check membership FIRST (fresh check)
-            check = await is_user_member(context, user_id, force_fresh=True)
-            
-            if not check['is_member']:
-                msg = await update.message.reply_text(
-                    get_join_message(check['channel'], check['group']),
-                    reply_markup=get_join_keyboard(),
-                    parse_mode='Markdown'
-                )
-                schedule_delete(context, chat_id, [msg.message_id], 120)
-                return MAIN_MENU
-            
-            # Process search
             context.user_data['query'] = query
             return await process_search(update, context, query)
     
-    # Normal start - show welcome
+    # 4. Normal Welcome (Agar koi link nahi tha)
     try:
         bot = await context.bot.get_me()
-        
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot.username}?startgroup=true")],
             [
@@ -712,26 +723,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🔍 Type movie or series name to search!\n\n"
             "📝 **Example:** `Avengers Endgame`\n\n"
-            "⚡ **Features:**\n"
-            "• Fast fuzzy search\n"
-            "• Multiple quality options\n"
-            "• Auto-delete for privacy\n\n"
             "Type any movie name to start! 👇"
         )
         
-        await update.message.reply_text(
-            welcome,
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text(welcome, reply_markup=keyboard, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Start command error: {e}")
-        await update.message.reply_text(
-            "🎬 Welcome to Ur Movie Bot!\n\nType any movie name to search."
-        )
+        await update.message.reply_text("🎬 Welcome! Type movie name to search.")
     
     return MAIN_MENU
-
 async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None) -> int:
     """Process movie search"""
     user_id = update.effective_user.id
@@ -833,26 +833,65 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat_id = query.message.chat.id
     data = query.data
     
+    # ============ SEND ALL FILES ============
+    if data.startswith("sendall_"):
+        try:
+            movie_id = int(data.split("_")[1])
+            qualities = get_movie_qualities(movie_id)
+            movie = get_movie_by_id(movie_id)
+            title = movie[1] if movie else "Movie"
+
+            if not qualities:
+                await query.answer("❌ No files!", show_alert=True)
+                return
+
+            await query.answer(f"🚀 Sending {len(qualities)} files...")
+            
+            # Loop through all qualities and send
+            for q in qualities:
+                # q format: (quality, url, file_id, size)
+                await send_movie(update, context, movie_id, f"{title} ({q[0]})", q[1], q[2])
+                await asyncio.sleep(1) # Flood wait se bachne ke liye
+            
+            # Menu delete kar do
+            try: await query.message.delete()
+            except: pass
+            
+        except Exception as e:
+            logger.error(f"Send all error: {e}")
+        return
+    
     # ============ NOOP (Page indicator) ============
     if data == "noop":
         await query.answer("📄 Page indicator", show_alert=False)
         return
     
-    # ============ VERIFY BUTTON ============
+    # ============ VERIFY BUTTON (AUTO PROCESS) ============
     if data == "verify":
-        await query.answer("🔍 Checking membership...", show_alert=True)
-        # FORCE FRESH CHECK - Ignore cache completely
+        await query.answer("🔍 Checking membership...", show_alert=False)
+        
+        # Force Check
         check = await is_user_member(context, user_id, force_fresh=True)
         
         if check['is_member']:
-            await query.edit_message_text(
-                "✅ **Verified Successfully!**\n\n"
-                "You can now search for any movie! 🎬\n"
-                "Just type the movie name 👇",
+            # Delete "Verify" message to clean chat
+            try: await query.message.delete()
+            except: pass
+
+            # 🚀 JAADU: Check agar koi purana link pending hai
+            if 'pending_start_args' in context.user_data:
+                saved_args = context.user_data.pop('pending_start_args')
+                context.args = saved_args
+                # Wapas start function chalao saved args ke sath
+                await start(update, context)
+                return
+
+            # Agar koi link nahi tha, to normal Success msg
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="✅ **Verified Successfully!**\n\nAb search karein ya link dobara click karein.",
                 parse_mode='Markdown'
             )
-            # Delete verification message after 10 seconds
-            schedule_delete(context, chat_id, [query.message.message_id], 10)
         else:
             # Still not joined
             try:
@@ -862,11 +901,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     parse_mode='Markdown'
                 )
             except telegram.error.BadRequest:
-                # Message same, show popup
-                await query.answer(
-                    "❌ You haven't joined yet! Please join both first.",
-                    show_alert=True
-                )
+                await query.answer("❌ You haven't joined yet!", show_alert=True)
         return
     
     # ============ BACK BUTTON ============
