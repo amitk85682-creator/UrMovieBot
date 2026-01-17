@@ -106,7 +106,52 @@ def release_db(conn):
         except Exception as e:
             logger.error(f"Error releasing connection: {e}")
 
-# ==================== MEMBERSHIP CHECK ====================
+# 👇👇👇 IS FUNCTION KO 'get_movie_by_id' KE NEECHE PASTE KARO 👇👇👇
+
+# 👇👇👇 IS FUNCTION KO 'get_movie_by_id' KE NEECHE PASTE KARO 👇👇👇
+
+def get_movies_fast_sql(query: str, limit: int = 5) -> List[Tuple]:
+    """
+    Smart SQL Search: Fast like SQL + Smart like FuzzyWuzzy.
+    Handles typos using PostgreSQL 'pg_trgm' (Similarity).
+    """
+    conn = None
+    try:
+        conn = get_db() # Is script me connection pool use ho raha hai
+        if not conn:
+            return []
+
+        cur = conn.cursor()
+        
+        # 1. Ensure Extension Enabled
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+        
+        # 2. Smart Query (SIMILARITY > 0.3)
+        sql = """
+            SELECT m.id, m.title, m.url, m.file_id, 
+                   SIMILARITY(m.title, %s) as sim_score
+            FROM movies m
+            WHERE SIMILARITY(m.title, %s) > 0.3
+            ORDER BY sim_score DESC
+            LIMIT %s
+        """
+        
+        cur.execute(sql, (query, query, limit))
+        results = cur.fetchall()
+        
+        # Format results: (id, title, url, file_id) - Score hata rahe hain return ke liye
+        final_results = [(r[0], r[1], r[2], r[3]) for r in results]
+        
+        cur.close()
+        return final_results
+
+    except Exception as e:
+        logger.error(f"Smart SQL Search Error: {e}")
+        return []
+    finally:
+        if conn:
+            release_db(conn) # Connection pool me wapis
+# ==================== MEMBERSHIP CHECK (FIXED) ====================
 async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Dict[str, Any]:
     """Check if user is member of channel and group"""
     
@@ -119,6 +164,7 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
     if not force_fresh and user_id in verified_users:
         last_checked, cached = verified_users[user_id]
         if (current_time - last_checked).total_seconds() < VERIFICATION_CACHE_TIME:
+            logger.info(f"Cache hit for {user_id}")
             return cached
     
     result = {
@@ -130,6 +176,7 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         'error': None
     }
     
+    # ✅ VALID STATUSES - Only actual members
     VALID_MEMBER_STATUSES = [
         ChatMember.MEMBER,
         ChatMember.ADMINISTRATOR,
@@ -148,6 +195,7 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         status = channel_member.status
         result['channel_status'] = str(status)
         
+        # Check if valid member
         if status in VALID_MEMBER_STATUSES:
             result['channel'] = True
         else:
@@ -167,6 +215,7 @@ async def is_user_member(context, user_id: int, force_fresh: bool = False) -> Di
         status = group_member.status
         result['group_status'] = str(status)
         
+        # Check if valid member
         if status in VALID_MEMBER_STATUSES:
             result['group'] = True
         else:
@@ -213,42 +262,6 @@ def get_join_message(channel_status: bool, group_status: bool) -> str:
     )
 
 # ==================== DATABASE FUNCTIONS ====================
-def get_movies_fast_sql(query: str, limit: int = 5) -> List[Tuple]:
-    """Smart SQL Search"""
-    conn = None
-    try:
-        conn = get_db()
-        if not conn:
-            return []
-
-        cur = conn.cursor()
-        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-        
-        sql = """
-            SELECT m.id, m.title, m.url, m.file_id, 
-                   SIMILARITY(m.title, %s) as sim_score
-            FROM movies m
-            WHERE SIMILARITY(m.title, %s) > 0.3
-            ORDER BY sim_score DESC
-            LIMIT %s
-        """
-        
-        cur.execute(sql, (query, query, limit))
-        results = cur.fetchall()
-        
-        # Format results: (id, title, url, file_id)
-        final_results = [(r[0], r[1], r[2], r[3]) for r in results]
-        
-        cur.close()
-        return final_results
-
-    except Exception as e:
-        logger.error(f"Smart SQL Search Error: {e}")
-        return []
-    finally:
-        if conn:
-            release_db(conn)
-
 def search_movies(query: str, limit: int = 10) -> List[Tuple]:
     """Search movies in database: Checks Title AND Aliases"""
     conn = None
@@ -328,8 +341,9 @@ def get_movie_by_id(movie_id: int) -> Optional[Tuple]:
         if conn:
             release_db(conn)
 
+# 👇 UPDATED FUNCTION FOR BATCH SUPPORT 👇
 def get_movie_qualities(movie_id: int) -> List[Tuple]:
-    """Get all qualities for a movie"""
+    """Get all qualities for a movie (Updated for Batch)"""
     conn = None
     try:
         conn = get_db()
@@ -337,6 +351,7 @@ def get_movie_qualities(movie_id: int) -> List[Tuple]:
             return []
         
         cur = conn.cursor()
+        # Simply get files, sorted by ID desc to show newest first
         cur.execute("""
             SELECT quality, url, file_id, file_size
             FROM movie_files
@@ -410,20 +425,31 @@ def movie_list_keyboard(movies: List[Tuple], page: int = 0, per_page: int = 5) -
     current = movies[start:end]
     
     keyboard = []
-    for movie_id, title, url, file_id in current:
-        emoji = "📺" if is_series(title) else "🎬"
+    for movie_data in current:
+        # Data unpack karo safely
+        if len(movie_data) >= 2:
+            movie_id = movie_data[0]
+            title = movie_data[1]
+        else:
+            continue
+
+        emoji = "📺" if "season" in title.lower() or "s0" in title.lower() else "🎬"
         display_title = f"{title[:35]}..." if len(title) > 35 else title
-        text = f"{emoji} {display_title}"
-        keyboard.append([InlineKeyboardButton(text, callback_data=f"m_{movie_id}")])
+        
+        # Button: 🎬 Movie Name
+        keyboard.append([InlineKeyboardButton(f"{emoji} {display_title}", callback_data=f"m_{movie_id}")])
     
-    # Navigation
+    # Navigation Buttons
     nav = []
     total_pages = (len(movies) + per_page - 1) // per_page
     
     if page > 0:
         nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"p_{page-1}"))
+    
+    # Page Indicator (Center)
     if total_pages > 1:
         nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+        
     if end < len(movies):
         nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"p_{page+1}"))
     
@@ -433,24 +459,28 @@ def movie_list_keyboard(movies: List[Tuple], page: int = 0, per_page: int = 5) -
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     
     return InlineKeyboardMarkup(keyboard)
-
+# 👇 UPDATED FUNCTION FOR SMART BUTTONS 👇
 def quality_keyboard(movie_id: int, qualities: List[Tuple]) -> InlineKeyboardMarkup:
-    """Create simple quality buttons like old bot"""
+    """Create quality selection keyboard with Smart Label Logic"""
     keyboard = []
     
     for quality, url, file_id, size in qualities:
         # Icons logic
-        icon = '📁'
+        icon = '🎬'
         q_lower = quality.lower()
         if '4k' in q_lower: icon = '💎'
-        elif '1080p' in q_lower: icon = '📀'
-        elif '720p' in q_lower: icon = '💿'
-        elif '480p' in q_lower: icon = '📼'
+        elif '1080p' in q_lower: icon = '🔷'
+        elif '720p' in q_lower: icon = '🟢'
+        elif '480p' in q_lower: icon = '🟡'
 
-        # Simple label: Icon + Quality + Size
-        # Agar quality me pehle se size hai to duplicate mat karo
-        size_text = f" ({size})" if size and size not in quality else ""
-        display_text = f"{icon} {quality}{size_text}"
+        # 👇 SMART LOGIC: Double Size Fix
+        # Agar quality string me pehle se '[' aur ']' hai (Batch Upload), to size mat jodo
+        if "[" in quality and "]" in quality:
+            display_text = f"{icon} {quality}"
+        else:
+            # Purane data/Web panel ke liye size jodo
+            size_text = f" ({size})" if size else ""
+            display_text = f"{icon} {quality}{size_text}"
 
         keyboard.append([InlineKeyboardButton(
             display_text,
@@ -972,6 +1002,82 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("❌ Cancelled")
         schedule_delete(context, chat_id, [query.message.message_id], 5)
         return
+    
+    # ============ GROUP GET (DM) ============
+    if data.startswith("g_"):
+        parts = data.split("_")
+        if len(parts) < 3:
+            await query.answer("❌ Invalid request!", show_alert=True)
+            return
+        
+        try:
+            movie_id = int(parts[1])
+            original_user = int(parts[2])
+        except ValueError:
+            await query.answer("❌ Invalid request!", show_alert=True)
+            return
+        
+        if user_id != original_user:
+            await query.answer("❌ This button is not for you!", show_alert=True)
+            return
+        
+        # Check membership (fresh check for group actions)
+        check = await is_user_member(context, user_id, force_fresh=True)
+        if not check['is_member']:
+            await query.edit_message_text(
+                get_join_message(check['channel'], check['group']),
+                reply_markup=get_join_keyboard(),
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Get movie details
+        movie = get_movie_by_id(movie_id)
+        
+        if not movie:
+            await query.edit_message_text("❌ Movie not found!")
+            return
+        
+        await query.edit_message_text(
+            f"📤 Sending **{movie[1]}** to your DM...",
+            parse_mode='Markdown'
+        )
+        
+        # Send in private chat
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🎬 Here's your requested movie!"
+            )
+            
+            # Create a simple object for send_movie
+            class SimpleUpdate:
+                def __init__(self, user, chat):
+                    self.effective_user = user
+                    self.effective_chat = chat
+            
+            class SimpleChat:
+                def __init__(self, chat_id):
+                    self.id = chat_id
+            
+            simple_update = SimpleUpdate(query.from_user, SimpleChat(user_id))
+            await send_movie(simple_update, context, movie[0], movie[1], movie[2], movie[3])
+            
+            await query.edit_message_text(
+                f"✅ **{movie[1]}** sent to your DM!",
+                parse_mode='Markdown'
+            )
+            
+        except telegram.error.Forbidden:
+            await query.edit_message_text(
+                "❌ Can't send DM! Please start the bot first:\n"
+                f"1. Go to @{(await context.bot.get_me()).username}\n"
+                "2. Press START\n"
+                "3. Try again"
+            )
+        except Exception as e:
+            logger.error(f"DM send error: {e}")
+            await query.edit_message_text("❌ Failed to send DM. Please try again.")
 
 # ==================== ADMIN COMMANDS ====================
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1205,7 +1311,64 @@ async def admin_add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             release_db(conn)
 
+# ==================== ERROR HANDLER ====================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Log the full traceback
+    import traceback
+    tb_string = ''.join(traceback.format_exception(None, context.error, context.error.__traceback__))
+    logger.error(f"Traceback:\n{tb_string}")
+    
+    # Try to notify user
+    if update and isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "❌ Something went wrong! Please try again later."
+            )
+        except:
+            pass
+
+# ==================== CANCEL HANDLER ====================
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel current operation"""
+    await update.message.reply_text("❌ Operation cancelled.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ==================== HELP COMMAND ====================
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show help message"""
+    help_text = (
+        "🎬 **Ur Movie Bot Help**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**🔍 How to Search:**\n"
+        "Just type any movie name!\n"
+        "Example: `Avengers`\n\n"
+        "**📱 Features:**\n"
+        "• Fast search with fuzzy matching\n"
+        "• Multiple quality options\n"
+        "• Auto-delete for privacy\n"
+        "• Support for Movies & Series\n\n"
+        "**⚡ Commands:**\n"
+        "/start - Start bot\n"
+        "/help - Show this message\n\n"
+        "**📢 Join Us:**\n"
+        f"• Channel: {CHANNEL_URL}\n"
+        f"• Group: {GROUP_URL}\n\n"
+        "**💡 Tips:**\n"
+        "• Join both Channel & Group for access\n"
+        "• Files auto-delete in 60 seconds\n"
+        "• Forward to save permanently\n\n"
+        "Enjoy! 🍿"
+    )
+    
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
 # ==================== GROUP MENTION HANDLER ====================
+# 👇👇👇 IS FUNCTION KO REPLACE KARO (Line ~1665) 👇👇👇
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle messages in groups using FAST SQL Search.
@@ -1216,82 +1379,36 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     text = update.message.text.strip()
-    bot = await context.bot.get_me()
-    bot_username = bot.username
     
     # 2. Commands ignore karo
     if text.startswith('/'):
         return
-
-    # 3. Agar user ne tag kiya hai to tag hata do
-    if f"@{bot_username}" in text:
-        text = text.replace(f"@{bot_username}", "").strip()
     
-    # 4. Bahut chote words ignore karo
+    # 3. Bahut chote words ignore karo
     if len(text) < 2:
         return
 
-    # 5. 🚀 FAST SEARCH CALL (Sirf SQL Check - No Python Lag)
-    movies = get_movies_fast_sql(text, limit=10)
+    # 4. 🚀 FAST SEARCH CALL (Sirf SQL Check - No Python Lag)
+    movies = get_movies_fast_sql(text, limit=5)
 
     if not movies:
+        # 🤫 Agar movie nahi mili, to YAHIN RUK JAO.
+        # Bot kuch reply nahi karega, group me shanti rahegi.
         return
 
-    # 6. Result Handling
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id  # Chat ID capture kiya
-
-    if len(movies) == 1:
-        # --- Case A: Single Result (Show Download Button) ---
-        movie = movies[0]
-        movie_id = movie[0]
-        movie_title = movie[1]
-
-        # 👇 MODIFIED: Using URL Button (Deep Link) instead of Callback
-        deep_link = f"https://t.me/{bot_username}?start=movie_{movie_id}"
-        
-        keyboard = InlineKeyboardMarkup([[ 
-            InlineKeyboardButton(
-                "📥 Download", 
-                url=deep_link
-            )
-        ]])
-        
-        is_series_bool = is_series(movie_title) if 'is_series' in globals() else False
-        emoji = "📺" if is_series_bool else "🎬"
-
-        sent_msg = await update.message.reply_text(
-            f"{emoji} **{movie_title}**\n\n"
-            f"Click below to download! 👇",
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-        
-        # Auto Delete schedule kiya
-        schedule_delete(context, chat_id, [sent_msg.message_id], delay=60)
-
-    else:
-        # --- Case B: Multiple Results (Deep Link) ---
-        safe_query = text.replace(' ', '_')
-        deep_link = f"https://t.me/{bot_username}?start=q_{safe_query}"
-        
-        keyboard = InlineKeyboardMarkup([[ 
-            InlineKeyboardButton(
-                f"📋 View {len(movies)} Results", 
-                url=deep_link
-            )
-        ]])
-        
-        sent_msg = await update.message.reply_text(
-            f"🔍 Found **{len(movies)} movies** for `{text}`\n\n"
-            f"Click to select! 👇",
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-
-        # Auto Delete schedule kiya
-        schedule_delete(context, chat_id, [sent_msg.message_id], delay=60)
-
+    # 5. Results handling - FilmFyBox Style Keyboard
+    # Hum seedha list dikhayenge, user click karega to Quality Menu khulega
+    keyboard = movie_list_keyboard(movies, page=0)
+    
+    # Reply to user
+    msg = await update.message.reply_text(
+        f"🎬 **Found {len(movies)} results for '{text}'**\n👇 Select movie:",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    
+    # Auto-delete (60 Seconds)
+    schedule_delete(context, update.effective_chat.id, [msg.message_id], delay=60)
 # ==================== MAIN BOT SETUP ====================
 def main():
     """Start the bot"""
