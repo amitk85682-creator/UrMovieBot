@@ -655,9 +655,10 @@ async def send_movie(
 
 # ==================== HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start command handler with Pending Request Save"""
+    """Start command handler with GIF & Premium Welcome"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+    user_first_name = update.effective_user.first_name
     
     # Log user activity
     log_user_activity(user_id, 'start', 'Bot started')
@@ -668,7 +669,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # 2. Agar Member NAHI hai -> Link Save karo & Join Button dikhao
     if not check['is_member']:
-        # AGAR DEEP LINK HAI TO SAVE KARO
         if context.args:
             context.user_data['pending_start_args'] = context.args
         
@@ -680,7 +680,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         schedule_delete(context, chat_id, [msg.message_id], 120)
         return MAIN_MENU
 
-    # 3. Agar Member HAI -> Process Deep Link
+    # 3. Agar Member HAI -> Process Deep Link (Movie/Search)
     if context.args:
         arg = context.args[0]
         
@@ -689,16 +689,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             try:
                 movie_id = int(arg.split('_')[1])
                 movie = get_movie_by_id(movie_id)
-                
                 if movie:
-                    # Movie Bhejo
                     await send_movie(update, context, movie[0], movie[1], movie[2], movie[3])
                 else:
                     await update.message.reply_text("❌ Movie not found!")
             except Exception as e:
                 logger.error(f"Deep link error: {e}")
                 await update.message.reply_text("❌ Invalid link!")
-            
             return MAIN_MENU
         
         # Search link: /start q_Movie_Name
@@ -707,29 +704,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             context.user_data['query'] = query
             return await process_search(update, context, query)
     
-    # 4. Normal Welcome (Agar koi link nahi tha)
+    # 4. 🔥 PREMIUM WELCOME WITH GIF (Jab koi link na ho)
     try:
         bot = await context.bot.get_me()
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot.username}?startgroup=true")],
-            [
-                InlineKeyboardButton("📢 Channel", url=CHANNEL_URL),
-                InlineKeyboardButton("💬 Group", url=GROUP_URL)
-            ]
-        ])
         
-        welcome = (
-            "🎬 **Ur Movie Bot**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🔍 Type movie or series name to search!\n\n"
-            "📝 **Example:** `Avengers Endgame`\n\n"
-            "Type any movie name to start! 👇"
+        # 👇 Premium Caption
+        welcome_caption = (
+            f"👋 **Hello {user_first_name}!**\n\n"
+            f"🎬 **Welcome to {bot.first_name}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"✨ **I can provide you:**\n"
+            f"🎥 Latest Movies & Web Series\n"
+            f"💿 480p, 720p, 1080p, 4K Qualities\n"
+            f"🔊 Dual/Multi Audio Support\n"
+            f"⚡ Fast & Auto-Delete System\n\n"
+            f"👇 **Click buttons below or just type movie name!**"
         )
-        
-        await update.message.reply_text(welcome, reply_markup=keyboard, parse_mode='Markdown')
+
+        # 👇 Buttons
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add Me To Your Group ➕", url=f"https://t.me/{bot.username}?startgroup=true")],
+            [
+                InlineKeyboardButton("📢 Updates", url=CHANNEL_URL),
+                InlineKeyboardButton("💬 Support", url=GROUP_URL)
+            ],
+            [InlineKeyboardButton("🔍 Search Here", switch_inline_query_current_chat="")]
+        ])
+
+        # 👇 GIF LOGIC (Tumhare Link se Copy karega)
+        # Link: https://t.me/c/2683355160/1660
+        # Chat ID extraction logic: -100 + 2683355160
+        DUMP_CHAT_ID = -1002683355160
+        GIF_MSG_ID = 1660
+
+        await context.bot.copy_message(
+            chat_id=chat_id,
+            from_chat_id=DUMP_CHAT_ID,
+            message_id=GIF_MSG_ID,
+            caption=welcome_caption,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+
     except Exception as e:
-        logger.error(f"Start command error: {e}")
-        await update.message.reply_text("🎬 Welcome! Type movie name to search.")
+        logger.error(f"Welcome GIF error: {e}")
+        # Fallback: Agar GIF fail ho jaye to Text Message bhejo
+        await update.message.reply_text(
+            f"🎬 **Welcome to {bot.first_name}!**\n\nType any movie name to search.",
+            reply_markup=keyboard if 'keyboard' in locals() else None,
+            parse_mode='Markdown'
+        )
     
     return MAIN_MENU
 async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None) -> int:
