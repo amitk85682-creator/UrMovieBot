@@ -1,4 +1,4 @@
-﻿        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; user-select: none; -webkit-tap-highlight-color: transparent; }
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; user-select: none; -webkit-tap-highlight-color: transparent; }
         :root {
             --bg: #0f0f0f;
             --surface: #1a1a1a;
@@ -385,4 +385,3 @@
             transition: 0.2s;
         }
         .request-glow-btn:active { transform: scale(0.95); }
-
