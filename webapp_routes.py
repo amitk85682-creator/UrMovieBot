@@ -128,8 +128,9 @@ def register_webapp_routes(
             }
     
             # Get files
-            cur.execute("SELECT quality, file_size FROM movie_files WHERE movie_id = %s", (movie_id,))
-            files = [{'quality': f[0], 'size': f[1]} for f in cur.fetchall()]
+            # Updated to fetch extra_info for Season/Episode parsing
+            cur.execute("SELECT quality, file_size, extra_info FROM movie_files WHERE movie_id = %s", (movie_id,))
+            files = [{'quality': f[0], 'size': f[1], 'extra_info': f[2] if len(f) > 2 else ''} for f in cur.fetchall()]
             movie['files'] = files
     
             cur.close()
