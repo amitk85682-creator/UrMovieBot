@@ -378,7 +378,10 @@ document.addEventListener('click', (e) => {
                                     if (!seasonsMap[s].episodes[sortEp]) {
                                         seasonsMap[s].episodes[sortEp] = { title: displayTitle, qualities: [] };
                                     }
-                                    seasonsMap[s].episodes[sortEp].qualities.push(f);
+                                                                        const dup = seasonsMap[s].episodes[sortEp].qualities.find(q => q.quality === f.quality && q.size === f.size);
+                                    if (!dup) {
+                                        seasonsMap[s].episodes[sortEp].qualities.push(f);
+                                    }
                                 } else {
                                     movieFiles.push(f);
                                 }
@@ -463,7 +466,7 @@ document.addEventListener('click', (e) => {
                 
                 ep.qualities.forEach(q => {
                     html += `
-                        <button class="ep-dl-btn" onclick="downloadMovie(${movieId})">
+                        <button class="ep-dl-btn" onclick="downloadFile(${q.id})">
                             <span class="ep-qtext">${q.quality} <span class="ep-size">${q.size || ''}</span></span>
                             <span class="ep-action"><i class="fas fa-download"></i></span>
                         </button>
@@ -574,6 +577,11 @@ document.addEventListener('click', (e) => {
             tg.openLink(`https://flimfybox-bot-yht0.onrender.com/watch/${id}`);
         };
 
+        
+        window.downloadFile = function(fileId) {
+            tg.HapticFeedback.impactOccurred('heavy');
+            tg.openLink(`https://flimfybox-bot-yht0.onrender.com/watch/file/${fileId}`);
+        };
         window.downloadMovie = function(id) {
             tg.HapticFeedback.impactOccurred('heavy');
             tg.openLink(`https://flimfybox-bot-yht0.onrender.com/watch/${id}`);

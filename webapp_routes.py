@@ -129,8 +129,19 @@ def register_webapp_routes(
     
             # Get files
             # Updated to fetch extra_info for Season/Episode parsing
-            cur.execute("SELECT quality, file_size, extra_info FROM movie_files WHERE movie_id = %s", (movie_id,))
-            files = [{'quality': f[0], 'size': f[1], 'extra_info': f[2] if len(f) > 2 else ''} for f in cur.fetchall()]
+            cur.execute("""
+                SELECT id, quality, file_size, extra_info, languages 
+                FROM movie_files 
+                WHERE movie_id = %s AND (url IS NOT NULL OR file_id IS NOT NULL)
+                ORDER BY CASE quality
+                    WHEN '4K' THEN 1
+                    WHEN 'HD Quality' THEN 2
+                    WHEN 'Standart Quality'  THEN 3
+                    WHEN 'Low Quality'  THEN 4
+                    ELSE 5
+                END DESC
+            """, (movie_id,))
+            files = [{'id': f[0], 'quality': f[1], 'size': f[2], 'extra_info': f[3] if len(f) > 3 else '', 'languages': f[4] if len(f) > 4 else ''} for f in cur.fetchall()]
             movie['files'] = files
     
             cur.close()
@@ -547,6 +558,78 @@ def register_webapp_routes(
         """
         return html
     
+
+    # 🛡️ MIDDLEMAN REDIRECT PAGE (Anti-Bot) FOR SPECIFIC FILE
+    @flask_app.route('/watch/file/<int:file_id>')
+    def secure_watch_file(file_id):
+        html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>FlimfyBox - Verifying Secure Connection...</title>
+            <style>
+                body { background: #09090b; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; }
+                .loader { border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid #f43f5e; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 20px; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+            </style>
+        </head>
+        <body>
+            <div class="loader"></div>
+            <h3>Securely verifying your connection...</h3>
+            <p style="color: #a1a1aa; font-size: 13px;">Please wait 2 seconds. You will be redirected automatically.</p>
+            
+            <script>
+                setTimeout(() => {
+                    fetch('/api/gen_link/file/""" + str(file_id) + """', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if(data.url) {
+                            window.location.href = data.url; 
+                        } else {
+                            document.body.innerHTML = "<h3>❌ Server Error. Please try again.</h3>";
+                        }
+                    }).catch(e => {
+                        document.body.innerHTML = "<h3>❌ Connection failed.</h3>";
+                    });
+                }, 1500); 
+            </script>
+        </body>
+        </html>
+        """
+        return html
+
+    @flask_app.route('/api/gen_link/file/<int:file_id>', methods=['POST'])
+    def gen_secure_link_file(file_id):
+        token = "tmpf_" + secrets.token_hex(6)
+        conn = get_db_connection()
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM temp_links WHERE created_at < NOW() - INTERVAL '1 minute'")
+                
+                # Check and add file_id column if it doesn't exist
+                cur.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name='temp_links' AND column_name='file_id';
+                """)
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE temp_links ADD COLUMN IF NOT EXISTS file_id INTEGER;")
+                    
+                cur.execute("INSERT INTO temp_links (token, file_id) VALUES (%s, %s)", (token, file_id))
+                conn.commit()
+                cur.close()
+            except Exception as e:
+                logger.error(f"Token Error: {e}")
+            finally:
+                close_db_connection(conn)
+                
+        bot_username = os.environ.get('BOT_USERNAME', 'FlimfyBoxBot')
+        tg_url = f"tg://resolve?domain={bot_username}&start={token}"
+        return jsonify({"url": tg_url})
+
     # 🔐 SECRET LINK GENERATOR API (Auto Delete Logic)
     @flask_app.route('/api/gen_link/<int:movie_id>', methods=['POST'])
     def gen_secure_link(movie_id):
