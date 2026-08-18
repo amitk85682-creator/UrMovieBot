@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import traceback
 import time
 import os
@@ -11587,7 +11587,6 @@ register_webapp_routes(
     get_db_connection=get_db_connection,
     close_db_connection=close_db_connection,
     store_user_request=store_user_request,
-    get_poster_from_tmdb_id=get_poster_from_tmdb_id,
     TMDB_API_KEY=TMDB_API_KEY,
     check_secure_link=check_secure_link,
     generate_secure_link=generate_secure_link,

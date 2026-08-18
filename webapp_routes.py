@@ -19,7 +19,6 @@ def register_webapp_routes(
     get_db_connection,
     close_db_connection,
     store_user_request,
-    get_poster_from_tmdb_id,
     TMDB_API_KEY,
     check_secure_link,
     generate_secure_link,
