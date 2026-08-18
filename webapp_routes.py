@@ -20,11 +20,6 @@ def register_webapp_routes(
     close_db_connection,
     store_user_request,
     TMDB_API_KEY,
-    check_secure_link,
-    generate_secure_link,
-    user_data_cache,
-    user_data_lock,
-    ADMIN_USER_ID,
     logger
 ):
     # 👇 NAYA FIX: UptimeRobot ke liye Root URL (Taaki 404 na aaye) 👇

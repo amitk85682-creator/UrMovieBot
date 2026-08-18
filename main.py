@@ -11588,11 +11588,6 @@ register_webapp_routes(
     close_db_connection=close_db_connection,
     store_user_request=store_user_request,
     TMDB_API_KEY=TMDB_API_KEY,
-    check_secure_link=check_secure_link,
-    generate_secure_link=generate_secure_link,
-    user_data_cache=user_data_cache,
-    user_data_lock=user_data_lock,
-    ADMIN_USER_ID=ADMIN_USER_ID,
     logger=logger
 )
 
