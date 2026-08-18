@@ -11522,8 +11522,24 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "9fa44f5e9fbd41415df930ce5b81c4d7"
 # get_db_connection(), close_db_connection(), store_user_request()
 # We'll assume they are available.
 
-from webapp_routes import webapp_bp
-flask_app.register_blueprint(webapp_bp)
+from webapp_routes import register_webapp_routes
+
+register_webapp_routes(
+    flask_app,
+    api_movies_cache=api_movies_cache,
+    search_cache=search_cache,
+    get_db_connection=get_db_connection,
+    close_db_connection=close_db_connection,
+    store_user_request=store_user_request,
+    get_poster_from_tmdb_id=get_poster_from_tmdb_id,
+    TMDB_API_KEY=TMDB_API_KEY,
+    check_secure_link=check_secure_link,
+    generate_secure_link=generate_secure_link,
+    user_data_cache=user_data_cache,
+    user_data_lock=user_data_lock,
+    ADMIN_USER_ID=ADMIN_USER_ID,
+    logger=logger
+)
 
 # ==================== RUN FLASK ====================
 
