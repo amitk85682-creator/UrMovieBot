@@ -4495,62 +4495,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     close_db_connection(conn)
 
                     
-
-            # 🔐 NAYA: ANTI-BOT FILE-SPECIFIC LINK SYSTEM
-            if payload.startswith("tmpf_"):
-                conn = get_db_connection()
-                if not conn:
-                    await context.bot.send_message(chat_id, "❌ System Error.")
-                    return
-
-                try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT file_id, created_at FROM temp_links WHERE token = %s", (payload,))
-                    res = cur.fetchone()
-                    
-                    cur.execute("DELETE FROM temp_links WHERE token = %s", (payload,))
-                    conn.commit()
-                    
-                    if not res:
-                        msg = await context.bot.send_message(chat_id, "❌ <b>Link Expired ya Invalid hai!</b>", parse_mode='HTML')
-                        track_message_for_deletion(context, chat_id, msg.message_id, 15)
-                        return
-                    
-                    file_id_pk, created_at = res
-                    time_diff = (datetime.now() - created_at).total_seconds()
-                    
-                    if time_diff > 60:
-                        msg = await context.bot.send_message(chat_id, "❌ <b>Link Expired!</b>\nYeh link sirf 60 seconds ke liye valid tha.", parse_mode='HTML')
-                        track_message_for_deletion(context, chat_id, msg.message_id, 15)
-                        return
-                    
-                    # File ID se file ka data fetch karo
-                    cur.execute("SELECT movie_id, quality, url, file_id FROM movie_files WHERE id = %s", (file_id_pk,))
-                    f_res = cur.fetchone()
-                    if not f_res:
-                        msg = await context.bot.send_message(chat_id, "❌ <b>File not found in database!</b>", parse_mode='HTML')
-                        track_message_for_deletion(context, chat_id, msg.message_id, 15)
-                        return
-                        
-                    movie_id, quality, url, tg_file_id = f_res
-                    
-                    # Fetch Title
-                    cur.execute("SELECT title FROM movies WHERE id = %s", (movie_id,))
-                    t_res = cur.fetchone()
-                    title = t_res[0] if t_res else "Requested File"
-                    cur.close()
-                    
-                    await send_movie_to_user(update, context, movie_id, title, url, tg_file_id, send_warning=True)
-                    logger.info(f"✅ Secure file token {payload} used successfully for file pk {file_id_pk}")
-                    return
-
-                except Exception as e:
-                    logger.error(f"Temp File Link Error: {e}")
-                    await context.bot.send_message(chat_id, "❌ Processing error.")
-                    return
-                finally:
-                    close_db_connection(conn)
-
             # --- CASE NAYA: DIRECT FILE CLICK FROM TEXT LINK ---
             if payload.startswith("file_"):
                 try:
