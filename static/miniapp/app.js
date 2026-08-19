@@ -1,6 +1,6 @@
 const tg = window.Telegram?.WebApp || {
             expand() {}, ready() {}, close() {}, openLink(url) { window.open(url, '_blank'); },
-            HapticFeedback: { notificationOccurred() {}, impactOccurred() {} }, initDataUnsafe: {}
+            HapticFeedback: { notificationOccurred() {}, impactOccurred() {} }, initDataUnsafe: {}, initData: ''
         };
         tg.expand();
         tg.ready();
@@ -9,6 +9,8 @@ const tg = window.Telegram?.WebApp || {
         // State
         let allMovies = [];
         let tmdbMoviesMap = {};
+        let activeMovie = null;
+        let savedMovieIds = new Set();
 
         // Utility
         function showToast(msg) {
@@ -22,6 +24,83 @@ const tg = window.Telegram?.WebApp || {
             const el = document.getElementById(elementId);
             if (el) el.scrollBy({ left: amount, behavior: 'smooth' });
         }
+
+        function telegramAuthHeaders() {
+            return tg.initData ? { 'X-Telegram-Init-Data': tg.initData } : {};
+        }
+
+        function setActiveNav(index) {
+            document.querySelectorAll('.nav-item').forEach((item, itemIndex) => {
+                item.classList.toggle('active', itemIndex === index);
+            });
+        }
+
+        window.showHome = function() {
+            document.getElementById('mainContent').style.display = '';
+            document.getElementById('myListContent').style.display = 'none';
+            document.getElementById('searchResultsContent').style.display = 'none';
+            setActiveNav(0);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        window.showSearch = function() {
+            showHome();
+            setActiveNav(1);
+            setTimeout(() => document.getElementById('searchInput').focus(), 120);
+        };
+
+        window.showMyList = async function() {
+            const grid = document.getElementById('myListGrid');
+            document.getElementById('mainContent').style.display = 'none';
+            document.getElementById('searchResultsContent').style.display = 'none';
+            document.getElementById('myListContent').style.display = 'block';
+            document.getElementById('searchDropdown').classList.remove('active');
+            setActiveNav(2);
+            grid.innerHTML = '<div class="loader" style="grid-column:1/-1">Loading your saved titles…</div>';
+            try {
+                const response = await fetch('/api/my-list', { headers: telegramAuthHeaders() });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.message || 'Could not load My List');
+                (data.movies || []).forEach(movie => {
+                    if (!allMovies.some(existing => String(existing.id) === String(movie.id))) allMovies.push(movie);
+                });
+                savedMovieIds = new Set((data.movies || []).map(movie => String(movie.id)));
+                grid.innerHTML = data.movies?.length
+                    ? renderCards(data.movies, 'grid-card', false)
+                    : '<div class="empty-my-list">Your list is empty.<br><span>Save a title with the + button.</span></div>';
+            } catch (error) {
+                grid.innerHTML = `<div class="empty-my-list">${error.message}</div>`;
+            }
+        };
+
+        window.toggleCurrentMyList = async function() {
+            if (!activeMovie || activeMovie.source === 'tmdb' || String(activeMovie.id).startsWith('tmdb_')) {
+                showToast('Only available titles can be saved right now.');
+                return;
+            }
+            try {
+                const isSaved = savedMovieIds.has(String(activeMovie.id));
+                const response = await fetch(isSaved ? `/api/my-list/${activeMovie.id}` : '/api/my-list', {
+                    method: isSaved ? 'DELETE' : 'POST',
+                    headers: { 'Content-Type': 'application/json', ...telegramAuthHeaders() },
+                    body: JSON.stringify({ movie_id: activeMovie.id })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.message || 'Could not save title');
+                const button = document.getElementById('detailMyListButton');
+                if (isSaved) {
+                    savedMovieIds.delete(String(activeMovie.id));
+                    if (button) button.innerHTML = '<i class="fas fa-plus"></i>';
+                    showToast('Removed from My List');
+                } else {
+                    savedMovieIds.add(String(activeMovie.id));
+                    if (button) button.innerHTML = '<i class="fas fa-check"></i>';
+                    showToast('Saved to My List');
+                }
+            } catch (error) {
+                showToast(error.message || 'Could not save title');
+            }
+        };
 
         // Pagination State
         let currentPage = 1;
@@ -117,6 +196,7 @@ const tg = window.Telegram?.WebApp || {
                 const top5 = movies.slice(0, 5);
                 const updateHero = () => {
                     const m = top5[idx];
+                    activeMovie = m;
                     document.getElementById('heroSlider').style.backgroundImage = `url(${m.image})`;
                     document.getElementById('heroTitle').innerText = m.title;
                     const metadata = [m.year, m.category, m.genre].filter(Boolean).join(' • ');
@@ -176,10 +256,46 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
     dropdown.innerHTML = '<div class="loader">Loading suggestions...</div>';
     dropdown.classList.add('active');
 
-    searchTimeout = setTimeout(() => {
+    searchTimeout = setTimeout(async () => {
         searchRequestId++;
         const currentId = searchRequestId;
-        
+        // Same-origin search is reliable inside Telegram WebView. The previous
+        // Google JSONP callback could be blocked and caused the error toast.
+        try {
+            const response = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+            const searchData = await response.json();
+            if (currentId !== searchRequestId) return;
+            if (!response.ok || searchData.status !== 'success') throw new Error(searchData.message || 'Search failed');
+            const results = searchData.results || [];
+            results.forEach(r => {
+                if (r.source === 'tmdb') tmdbMoviesMap[r.id] = r;
+                else if (!allMovies.some(m => String(m.id) === String(r.id))) allMovies.push(r);
+            });
+            if (!results.length) {
+                dropdown.innerHTML = `<div class="loader">No title found for “${q}”. Try a different spelling.</div>`;
+                return;
+            }
+            dropdown.innerHTML = results.slice(0, 8).map(r => {
+                const isTMDB = r.source === 'tmdb';
+                const title = String(r.title || 'Unknown').replace(/'/g, "\\'");
+                const action = isTMDB
+                    ? `<button class="btn-sm btn-sm-outline" onclick="requestMovie('${title}')">Request</button>`
+                    : '<button class="btn-sm btn-sm-primary">View</button>';
+                const click = isTMDB
+                    ? `onclick="openDetails('${r.id}', true); document.getElementById('searchDropdown').classList.remove('active');"`
+                    : `onclick="openDetails('${r.id}', false); document.getElementById('searchDropdown').classList.remove('active');"`;
+                return `<div class="search-item fade-in" ${click}>
+                    <img src="${r.image}" loading="lazy" onerror="this.src='https://via.placeholder.com/50x75?text=No+Poster'">
+                    <div class="search-item-info"><div class="search-item-title">${r.title}</div>
+                    <div class="search-item-meta"><span>${r.year || '—'}</span><span>${isTMDB ? 'Request' : 'Available'}</span></div></div>
+                    <div class="search-actions">${action}</div></div>`;
+            }).join('');
+        } catch (error) {
+            console.error('Search failed:', error);
+            dropdown.innerHTML = '<div class="loader">Search is temporarily unavailable. Please try again.</div>';
+        }
+        return;
+
         // Remove old script FIRST to prevent pile-up
         const oldScript = document.getElementById('googleSuggestScript');
         if (oldScript) oldScript.remove();
@@ -292,6 +408,12 @@ document.addEventListener('click', (e) => {
         window.openDetails = function(id, isTMDB) {
             const movie = isTMDB ? tmdbMoviesMap[id] : allMovies.find(m => m.id == id);
             if (!movie) return;
+            activeMovie = movie;
+            const myListButton = document.getElementById('detailMyListButton');
+            if (myListButton) {
+                myListButton.innerHTML = savedMovieIds.has(String(movie.id))
+                    ? '<i class="fas fa-check"></i>' : '<i class="fas fa-plus"></i>';
+            }
             if (isTMDB) {
                 // show request button
                 const backdropImg = movie.image; // fallback

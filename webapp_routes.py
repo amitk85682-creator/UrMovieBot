@@ -7,9 +7,12 @@ import psycopg2
 from datetime import datetime
 import requests
 from urllib.parse import quote
+from urllib.parse import parse_qsl
 import random
 import re
 import secrets
+import hashlib
+import hmac
 
 def register_webapp_routes(
     flask_app,
@@ -22,6 +25,43 @@ def register_webapp_routes(
     TMDB_API_KEY,
     logger
 ):
+    def telegram_user_from_request():
+        """Validate Telegram WebApp initData and return its signed-in user."""
+        init_data = request.headers.get('X-Telegram-Init-Data', '')
+        bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+        if not init_data or not bot_token:
+            return None
+        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = values.pop('hash', '')
+        if not received_hash:
+            return None
+        data_check_string = '\n'.join(f'{key}={value}' for key, value in sorted(values.items()))
+        secret_key = hmac.new(b'WebAppData', bot_token.encode(), hashlib.sha256).digest()
+        expected_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_hash, received_hash):
+            return None
+        try:
+            user = json.loads(values.get('user', '{}'))
+            return user if user.get('id') else None
+        except (TypeError, ValueError):
+            return None
+
+    def upsert_miniapp_user(cur, user):
+        cur.execute("""
+            INSERT INTO miniapp_users (user_id, username, first_name, last_seen)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                last_seen = CURRENT_TIMESTAMP
+        """, (user['id'], user.get('username', ''), user.get('first_name', '')))
+
+    def require_telegram_user():
+        user = telegram_user_from_request()
+        if not user:
+            return None, (jsonify({'status': 'error', 'message': 'Open My List inside Telegram.'}), 401)
+        return user, None
+
     # 👇 NAYA FIX: UptimeRobot ke liye Root URL (Taaki 404 na aaye) 👇
     @flask_app.route('/', methods=['GET', 'HEAD'])
     def home():
@@ -333,6 +373,97 @@ def register_webapp_routes(
             return jsonify({'status': 'success', 'message': 'Request saved & Admin Notified'})
         else:
             return jsonify({'status': 'error', 'message': 'Could not save request'}), 500
+
+    @flask_app.route('/api/my-list', methods=['GET'])
+    def get_my_list():
+        user, error = require_telegram_user()
+        if error:
+            return error
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'status': 'error', 'message': 'Database connection failed'}), 500
+        try:
+            cur = conn.cursor()
+            upsert_miniapp_user(cur, user)
+            cur.execute("""
+                SELECT m.id, m.title, m.year, m.poster_url, m.rating, m.genre, m.category
+                FROM user_watchlist w
+                JOIN movies m ON m.id = w.movie_id
+                WHERE w.user_id = %s
+                ORDER BY w.created_at DESC
+            """, (user['id'],))
+            movies = [
+                {
+                    'id': row[0], 'title': row[1], 'year': row[2] or '',
+                    'image': row[3] or 'https://via.placeholder.com/300x450?text=No+Poster',
+                    'rating': row[4] or 'N/A', 'genre': row[5] or 'Unknown',
+                    'category': row[6] or 'Movie', 'source': 'local'
+                }
+                for row in cur.fetchall()
+            ]
+            conn.commit()
+            cur.close()
+            return jsonify({'status': 'success', 'movies': movies})
+        except Exception as e:
+            logger.error(f"My List fetch error: {e}")
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Could not load My List'}), 500
+        finally:
+            close_db_connection(conn)
+
+    @flask_app.route('/api/my-list', methods=['POST'])
+    def add_to_my_list():
+        user, error = require_telegram_user()
+        if error:
+            return error
+        data = request.get_json(silent=True) or {}
+        try:
+            movie_id = int(data.get('movie_id'))
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Invalid movie'}), 400
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'status': 'error', 'message': 'Database connection failed'}), 500
+        try:
+            cur = conn.cursor()
+            upsert_miniapp_user(cur, user)
+            cur.execute("SELECT 1 FROM movies WHERE id = %s", (movie_id,))
+            if not cur.fetchone():
+                return jsonify({'status': 'error', 'message': 'Movie not found'}), 404
+            cur.execute("""
+                INSERT INTO user_watchlist (user_id, movie_id)
+                VALUES (%s, %s) ON CONFLICT (user_id, movie_id) DO NOTHING
+            """, (user['id'], movie_id))
+            conn.commit()
+            cur.close()
+            return jsonify({'status': 'success', 'saved': True})
+        except Exception as e:
+            logger.error(f"My List add error: {e}")
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Could not save to My List'}), 500
+        finally:
+            close_db_connection(conn)
+
+    @flask_app.route('/api/my-list/<int:movie_id>', methods=['DELETE'])
+    def remove_from_my_list(movie_id):
+        user, error = require_telegram_user()
+        if error:
+            return error
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'status': 'error', 'message': 'Database connection failed'}), 500
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM user_watchlist WHERE user_id = %s AND movie_id = %s", (user['id'], movie_id))
+            conn.commit()
+            cur.close()
+            return jsonify({'status': 'success', 'saved': False})
+        except Exception as e:
+            logger.error(f"My List removal error: {e}")
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Could not update My List'}), 500
+        finally:
+            close_db_connection(conn)
     
     # 🤖 GOOGLE AUTO-SUGGEST PROXY (Spelling Fixer)
     @flask_app.route('/api/suggest', methods=['GET'])

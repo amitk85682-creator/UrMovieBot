@@ -13,7 +13,7 @@
     <header class="app-header">
         <div class="brand-mark"><i class="fas fa-play"></i></div>
         <div class="brand-copy"><div class="logo">FlimfyBox</div><span>YOUR MOVIE SPACE</span></div>
-        <button class="header-action" type="button" aria-label="My list" onclick="showToast('My List is coming soon')"><i class="far fa-bookmark"></i></button>
+        <button class="header-action" type="button" aria-label="My list" onclick="showMyList()"><i class="far fa-bookmark"></i></button>
     </header>
     <div class="search-section">
         <div class="search-box">
@@ -35,7 +35,7 @@
                     <p id="heroMeta">Premium Collection</p>
                     <div class="hero-actions">
                         <button class="watch-button" type="button" id="heroWatch"><i class="fas fa-play"></i> Watch now</button>
-                        <button class="round-button" type="button" aria-label="Add to My List" onclick="showToast('Added to My List')"><i class="fas fa-plus"></i></button>
+                        <button class="round-button" type="button" aria-label="Add to My List" onclick="toggleCurrentMyList()"><i class="fas fa-plus"></i></button>
                     </div>
                 </div>
             </div>
@@ -85,6 +85,12 @@
         <div class="movie-grid" id="searchGrid"></div>
     </div>
 
+    <div id="myListContent" style="display: none;">
+        <div class="row-header"><div class="row-header-left"><i class="far fa-bookmark"></i> My List</div></div>
+        <div class="my-list-subtitle">Saved to your Telegram account</div>
+        <div class="movie-grid" id="myListGrid"></div>
+    </div>
+
     <div class="details-page" id="detailsPage">
         <div class="dp-header">
             <button class="btn-back" onclick="closeDetails()"><i class="fas fa-chevron-left"></i></button>
@@ -106,7 +112,7 @@
                 </div>
                 <div class="detail-actions">
                     <button class="detail-play" type="button" onclick="document.querySelector('#dpTrailerBtn .btn-trailer, #dpTrailerBtn .btn-request')?.click()"><i class="fas fa-play"></i> Play trailer</button>
-                    <button class="detail-icon-button" type="button" aria-label="Add to My List" onclick="showToast('Added to My List')"><i class="fas fa-plus"></i></button>
+                    <button class="detail-icon-button" id="detailMyListButton" type="button" aria-label="Add to My List" onclick="toggleCurrentMyList()"><i class="fas fa-plus"></i></button>
                     <button class="detail-icon-button" type="button" aria-label="Share" onclick="showToast('Share link copied')"><i class="fas fa-share-alt"></i></button>
                 </div>
                 <section class="overview-section">
@@ -142,9 +148,9 @@
     <div class="toast" id="toast">✅ Done!</div>
 
     <nav class="bottom-nav" aria-label="Main navigation">
-        <button class="nav-item active" type="button" onclick="scrollTo({top: 0, behavior: 'smooth'})"><i class="fas fa-house"></i><span>Home</span></button>
-        <button class="nav-item" type="button" onclick="document.getElementById('searchInput').focus()"><i class="fas fa-magnifying-glass"></i><span>Search</span></button>
-        <button class="nav-item" type="button" onclick="showToast('My List is coming soon')"><i class="far fa-bookmark"></i><span>My List</span></button>
+        <button class="nav-item active" type="button" onclick="showHome()"><i class="fas fa-house"></i><span>Home</span></button>
+        <button class="nav-item" type="button" onclick="showSearch()"><i class="fas fa-magnifying-glass"></i><span>Search</span></button>
+        <button class="nav-item" type="button" onclick="showMyList()"><i class="far fa-bookmark"></i><span>My List</span></button>
     </nav>
 
     <script src="{{ url_for('static', filename='miniapp/app.js') }}"></script>

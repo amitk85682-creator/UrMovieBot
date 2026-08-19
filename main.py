@@ -1923,6 +1923,26 @@ def setup_database():
         """)
         # Existing deployments already have this table, so migrate it safely.
         cur.execute("ALTER TABLE temp_links ADD COLUMN IF NOT EXISTS movie_file_id INTEGER")
+
+        # Telegram itself is the account system for the Mini App. These tables
+        # hold only the Telegram identity and its saved titles—no password,
+        # email, or separate sign-up is required.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS miniapp_users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_watchlist (
+                user_id BIGINT NOT NULL REFERENCES miniapp_users(user_id) ON DELETE CASCADE,
+                movie_id INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, movie_id)
+            )
+        """)
         
         # 👇👇👇 NAYA TABLE: Auto-Delete Queue ke liye 👇👇👇
         cur.execute("""
@@ -2705,6 +2725,44 @@ def store_user_request(user_id, username, first_name, movie_title, group_id=None
         except:
             pass
         return False
+
+
+def record_telegram_user(user, chat_id=None):
+    """Create/update the user's passwordless Mini App profile from Telegram."""
+    if not user:
+        return
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        user_id = user.id
+        username = user.username or ''
+        first_name = user.first_name or ''
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO miniapp_users (user_id, username, first_name, last_seen)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                last_seen = CURRENT_TIMESTAMP
+        """, (user_id, username, first_name))
+        cur.execute("""
+            INSERT INTO user_activity (user_id, username, first_name, chat_id, last_seen)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                chat_id = EXCLUDED.chat_id,
+                last_seen = CURRENT_TIMESTAMP
+        """, (user_id, username, first_name, chat_id))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.warning(f"Could not record Telegram user {getattr(user, 'id', 'unknown')}: {e}")
+        conn.rollback()
+    finally:
+        close_db_connection(conn)
 
 
 # ==================== METADATA FUNCTIONS ====================
@@ -4410,6 +4468,10 @@ user_processing_locks = defaultdict(Lock)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+    try:
+        await run_async(record_telegram_user, update.effective_user, chat_id)
+    except Exception as e:
+        logger.warning(f"Telegram profile setup failed for {user_id}: {e}")
     
     # ✅ FIX 1: Message ko safe tarike se nikalein (Button aur Text dono ke liye)
     message = update.effective_message 
