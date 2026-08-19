@@ -23,7 +23,7 @@ import aiohttp
 from flask import jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
-from urllib.parse import urlparse, urlunparse, quote
+from urllib.parse import urlparse, urlunparse, quote, unquote
 from collections import defaultdict
 from telegram.error import RetryAfter, TelegramError
 from typing import Optional
@@ -2455,6 +2455,33 @@ def _normalize_search_text(text: str) -> str:
     return re.sub(r'[^a-z0-9]', '', (text or '').lower())
 
 
+def get_google_title_suggestions(query: str, limit: int = 3):
+    """Resolve common misspellings server-side so Telegram clients need no JSONP."""
+    cache_key = f"google_title_suggestions_{query.lower()}"
+    cached = search_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        response = requests.get(
+            'https://suggestqueries.google.com/complete/search',
+            params={'client': 'firefox', 'q': f'{query} movie'},
+            headers={'User-Agent': 'Mozilla/5.0'}, timeout=3
+        )
+        data = response.json()
+        suggestions = data[1] if isinstance(data, list) and len(data) > 1 else []
+        clean = []
+        for item in suggestions:
+            title = re.sub(r'\s+(movie|series|web series)\s*$', '', str(item), flags=re.I).strip()
+            if title and title.lower() != query.lower() and title not in clean:
+                clean.append(title)
+        result = clean[:limit]
+    except Exception as e:
+        logger.info(f"Google suggestion lookup skipped for '{query}': {e}")
+        result = []
+    search_cache.set(cache_key, result)
+    return result
+
+
 def get_movies_from_db(user_query, limit=10):
     cache_key = f"db_fuzzy_{user_query}_{limit}"
     cached = search_cache.get(cache_key)
@@ -2538,9 +2565,10 @@ def _get_movies_from_db_nocache(user_query, limit=10):
         # Speed par asar nahi: fuzzywuzzy already sabhi titles ko score karta hai,
         # sirf top-N return karta hai — N badhane se extra compute nahi lagta.
         pool_size = max(limit * 5, 50)
-        matches = process.extract(user_query, movie_titles, scorer=fuzz.token_sort_ratio, limit=pool_size)
+        # WRatio is resilient to transposed/missing letters: "rechar" → "Reacher".
+        matches = process.extract(user_query, movie_titles, scorer=fuzz.WRatio, limit=pool_size)
 
-        filtered_movies = [movie_dict[title] for title, score, index in matches if score >= 65]
+        filtered_movies = [movie_dict[title] for title, score, index in matches if score >= 58]
 
         logger.info(f"Found {len(filtered_movies)} fuzzy matches")
 
