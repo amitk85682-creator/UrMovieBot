@@ -4372,10 +4372,17 @@ async def background_search_and_send(update: Update, context: ContextTypes.DEFAU
             
             safe_query = quote(query_text)
             web_app_url = f"{WEB_APP_URL}?req={safe_query}"
-            
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))]
-            ])
+            suggestions = await run_async(get_google_title_suggestions, query_text, limit=3)
+            keyboard_rows = []
+            for title in suggestions:
+                callback_title = quote(title[:35], safe='')
+                if len(f"retrysearch_{callback_title}".encode('utf-8')) <= 64:
+                    keyboard_rows.append([InlineKeyboardButton(f"🔎 Search: {title}", callback_data=f"retrysearch_{callback_title}")])
+            request_title = quote(query_text[:35], safe='')
+            if len(f"request_prefill_{request_title}".encode('utf-8')) <= 64:
+                keyboard_rows.append([InlineKeyboardButton("🙋 Request this title", callback_data=f"request_prefill_{request_title}")])
+            keyboard_rows.append([InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))])
+            keyboard = InlineKeyboardMarkup(keyboard_rows)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"😕 Sorry, <b>'{query_text}'</b> not found.\n\nस्पेलिंग चेक करने और Request भेजने के लिए नीचे क्लिक करें 👇",
@@ -4902,6 +4909,9 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 2. Not Found
         if not movies:
+            # Google runs on the server (not through a WebView JSONP callback),
+            # so a spelling such as "rechar" can be retried from Telegram too.
+            suggestions = await run_async(get_google_title_suggestions, search_term, limit=3)
             if SEARCH_ERROR_GIFS:
                 try:
                     gif = random.choice(SEARCH_ERROR_GIFS)
@@ -4930,10 +4940,21 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
             safe_query = quote(query)
             web_app_url = f"{WEB_APP_URL}?req={safe_query}"
 
-            keyboard = InlineKeyboardMarkup([
+            keyboard_rows = []
+            for title in suggestions:
+                callback_title = quote(title[:35], safe='')
+                # Telegram callback_data is capped at 64 bytes.
+                if len(f"retrysearch_{callback_title}".encode('utf-8')) <= 64:
+                    keyboard_rows.append([InlineKeyboardButton(f"🔎 Search: {title}", callback_data=f"retrysearch_{callback_title}")])
+            # This lets a user request the typed title without opening the mini app.
+            request_title = quote(query[:35], safe='')
+            if len(f"request_prefill_{request_title}".encode('utf-8')) <= 64:
+                keyboard_rows.append([InlineKeyboardButton("🙋 Request this title", callback_data=f"request_prefill_{request_title}")])
+            keyboard_rows.extend([
                 [InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))],
                 [InlineKeyboardButton("📢 Update Channel: Join BackUp", url=UPDATE_CHANNEL_URL)]
             ])
+            keyboard = InlineKeyboardMarkup(keyboard_rows)
             
             msg = await update.message.reply_text(
                 text=not_found_text,
@@ -5085,6 +5106,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
     data = query.data
+
+    # Server-side spelling suggestions shown after a failed Telegram search.
+    # Re-run the normal DB fuzzy search with the suggested, corrected title.
+    if data.startswith("retrysearch_"):
+        await query.answer()
+        suggested_title = unquote(data[len("retrysearch_"):]).strip()
+        if not suggested_title:
+            return
+        movies = await run_async(get_movies_from_db, suggested_title, limit=10)
+        if not movies:
+            await query.answer("This title is not available yet. You can request it below.", show_alert=True)
+            return
+        context.user_data['search_results'] = movies
+        context.user_data['search_query'] = suggested_title
+        await query.edit_message_text(
+            f"<b>━━━━━━ 🎬 𝗦𝗲𝗮𝗿𝗰𝗵 𝗥𝗲𝘀𝘂𝗹𝘁𝘀 ━━━━━━</b>\n\n"
+            f"✦ Found <b>{len(movies)}</b> results for '<b>{suggested_title}</b>'\n\n"
+            "👇 <b>Select your movie below:</b>",
+            reply_markup=create_movie_selection_keyboard(movies, page=0),
+            parse_mode='HTML'
+        )
+        return
 
     # ✅ IMPROVED: Group Authorization Check using callback_data embedded user_id
     # Agar callback_data me _u{user_id} suffix hai, to check karo ki click karne wala wahi user hai
@@ -11669,6 +11712,24 @@ async def start_request_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Step 1: User clicks 'Request This Movie' -> Show Short & Stylish Guidelines"""
     query = update.callback_query
     await query.answer()
+
+    # Failed search results can open the request confirmation directly in chat.
+    # The regular `request_` entry point remains unchanged and still asks for a name.
+    if query.data.startswith("request_prefill_"):
+        movie_title = unquote(query.data[len("request_prefill_"):]).strip()
+        if movie_title:
+            context.user_data['temp_request_name'] = movie_title
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Yes, Confirm", callback_data="confirm_yes"),
+                InlineKeyboardButton("❌ No, Cancel", callback_data="confirm_no")
+            ]])
+            await query.edit_message_text(
+                f"🔔 <b>Confirmation Required</b>\n\n"
+                f"क्या आप <b>'{movie_title}'</b> को रिक्वेस्ट करना चाहते हैं?",
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+            return CONFIRMATION
     
     # --- NEW STYLISH & SHORT TEXT ---
     request_instruction_text = (

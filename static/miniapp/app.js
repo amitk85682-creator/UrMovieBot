@@ -272,7 +272,14 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
                 else if (!allMovies.some(m => String(m.id) === String(r.id))) allMovies.push(r);
             });
             if (!results.length) {
-                dropdown.innerHTML = `<div class="loader">No title found for “${q}”. Try a different spelling.</div>`;
+                // A title can be absent from both our catalogue and TMDB.  It
+                // must still be requestable; otherwise the user hits a dead end.
+                const safeQuery = q.replace(/'/g, "\\'");
+                dropdown.innerHTML = `<div class="empty-search-state">
+                    <p>No title found for “${q}”.</p>
+                    <p class="search-hint">Check the spelling, or request this title directly.</p>
+                    <button class="request-glow-btn" onclick="requestSilent('${safeQuery}')"><i class="fas fa-paper-plane"></i> Request “${q}”</button>
+                </div>`;
                 return;
             }
             dropdown.innerHTML = results.slice(0, 8).map(r => {
