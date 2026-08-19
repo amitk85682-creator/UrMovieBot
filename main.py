@@ -5153,6 +5153,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not movies:
             await query.answer("This title is not available yet. You can request it below.", show_alert=True)
             return
+
+        # A correction button (for example "Dhurandhar") is already the
+        # user's final choice.  When it resolves to one exact local title,
+        # open that title's files immediately instead of making the user click
+        # the same title a second time in a selection list.
+        normalized_suggestion = _normalize_search_text(suggested_title)
+        exact_movies = [
+            movie for movie in movies
+            if len(movie) > 1 and _normalize_search_text(movie[1]) == normalized_suggestion
+        ]
+        chosen_movie = exact_movies[0] if len(exact_movies) == 1 else (movies[0] if len(movies) == 1 else None)
+        if chosen_movie:
+            movie_id, title, url, file_id = chosen_movie[:4]
+            try:
+                await query.edit_message_text(
+                    f"🔎 <b>{title}</b> मिल गई — नीचे files चुनें 👇",
+                    parse_mode='HTML'
+                )
+            except Exception:
+                pass
+            await send_movie_to_user(update, context, movie_id, title, url, file_id)
+            return
+
         context.user_data['search_results'] = movies
         context.user_data['search_query'] = suggested_title
         await query.edit_message_text(
