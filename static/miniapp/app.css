@@ -1,16 +1,24 @@
 * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; user-select: none; -webkit-tap-highlight-color: transparent; }
         :root {
-            --bg: #0f0f0f;
-            --surface: #1a1a1a;
-            --surface-light: #2a2a2a;
-            --primary: #e50914;       /* Netflix red */
+            --bg: #0b0c10;
+            --surface: #16181c;
+            --surface-light: #21242a;
+            --primary: #e50914;
             --primary-soft: #b20710;
             --primary-glow: rgba(229, 9, 20, 0.4);
             --text: #ffffff;
-            --text-muted: #a0a0a0;
-            --border: rgba(229, 9, 20, 0.25);
-            --shadow: 0 10px 30px -10px black;
+            --text-muted: #9ba0a8;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-light: rgba(255, 255, 255, 0.12);
+            --shadow: 0 10px 30px rgba(0,0,0,0.8);
             --shadow-glow: 0 8px 30px var(--primary-glow);
+            --spacing-4: 4px;
+            --spacing-8: 8px;
+            --spacing-12: 12px;
+            --spacing-16: 16px;
+            --spacing-20: 20px;
+            --spacing-24: 24px;
+            --spacing-32: 32px;
         }
         body { background: var(--bg); color: var(--text); overflow-x: hidden; padding-bottom: 40px; }
         /* Header */
@@ -229,41 +237,40 @@
         .dp-backdrop {
             position: relative;
             width: 100%;
-            height: 50vh;
-            min-height: 320px;
+            height: 55vh;
+            min-height: 380px;
             background-size: cover;
-            background-position: top center; /* 👉 'center 20%' ki jagah 'top center' karein taaki landscape image ka main hissa dikhe */
+            background-position: center;
             overflow: hidden;
         }
         .dp-backdrop::after {
             content: '';
             position: absolute;
             inset: 0;
-            background: linear-gradient(to top, var(--bg) 0%, rgba(0,0,0,0.6) 70%, transparent 100%);
+            background: linear-gradient(to top, var(--bg) 0%, rgba(11,12,16,0.9) 25%, rgba(11,12,16,0.4) 60%, transparent 100%);
         }
         .dp-poster-float {
             flex-shrink: 0;
-            width: 120px;
+            width: 110px;
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 20px 40px -10px black;
-            border: 2px solid rgba(255,255,255,0.2);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.8);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         .dp-poster-float img {
             width: 100%;
             aspect-ratio: 2 / 3;
             object-fit: cover;
-            border-radius: 12px;
             display: block;
         }
         .dp-title-row {
             display: flex;
             align-items: flex-end;
-            gap: 18px;
-            margin-top: -100px;
+            gap: var(--spacing-16);
+            margin-top: -80px;
             position: relative;
             z-index: 2015;
-            margin-bottom: 24px;
+            margin-bottom: var(--spacing-24);
         }
         .dp-info {
             padding: 28px;
@@ -273,33 +280,41 @@
         }
         
         .dp-title {
-            font-size: 28px;
+            font-size: 26px;
             font-weight: 800;
-            line-height: 1.2;
-            text-shadow: 0 4px 20px black;
+            line-height: 1.1;
+            letter-spacing: -0.5px;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.8);
             flex: 1;
             min-width: 0;
         }
         .rich-info-box {
-            background: rgba(20,20,20,0.7);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--border);
-            border-radius: 28px;
-            padding: 24px;
-            margin-bottom: 28px;
-            box-shadow: 0 30px 50px -20px black;
-        }
-        .rich-info-box > div {
-            margin-bottom: 14px;
-            font-size: 15px;
             display: flex;
-            align-items: baseline;
-            gap: 12px;
             flex-wrap: wrap;
+            gap: var(--spacing-12);
+            margin-bottom: var(--spacing-24);
         }
-        .rich-info-box span { color: var(--text-muted); font-weight: 500; min-width: 80px; }
-        .rich-info-box label { font-weight: 700; color: var(--primary); }
-        .rich-desc { margin-top: 18px; font-size: 14px; color: var(--text-muted); line-height: 1.7; border-top: 1px dashed var(--border); padding-top: 18px; }
+        .info-pill {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.05);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .info-pill.highlight {
+            color: var(--text);
+            background: rgba(255,255,255,0.1);
+        }
+        .info-pill i {
+            color: var(--primary);
+        }
+        .rich-desc { margin-top: var(--spacing-16); font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+
         /* Cast */
         .cast-list { display: flex; gap: 15px; overflow-x: auto; padding: 10px 0 20px; }
         .cast-item { flex: 0 0 80px; text-align: center; }
@@ -388,7 +403,7 @@
 
 /* === PREMIUM SEASON & EPISODE UI === */
 .seasons-container {
-    margin: 24px 0 16px 0;
+    margin: var(--spacing-32) 0 var(--spacing-16) 0;
 }
 
 .season-scroll-wrapper {
@@ -396,6 +411,9 @@
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     padding-bottom: 8px;
+    margin: 0 -28px;
+    padding-left: 28px;
+    padding-right: 28px;
 }
 .season-scroll-wrapper::-webkit-scrollbar {
     display: none;
@@ -403,85 +421,118 @@
 
 .season-pill-container {
     display: flex;
-    gap: 10px;
+    gap: var(--spacing-12);
 }
 
 .season-pill {
     white-space: nowrap;
-    background: rgba(255, 255, 255, 0.04);
     color: var(--text-muted);
-    padding: 10px 22px;
-    border-radius: 8px;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: color 0.2s ease;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
+    position: relative;
+    padding-bottom: 8px;
 }
 
 .season-pill:active {
-    transform: scale(0.96);
+    color: var(--text);
 }
 
 .season-pill.active {
-    background: var(--text);
-    color: var(--bg);
-    border-color: var(--text);
-    box-shadow: 0 4px 15px rgba(255, 255, 255, 0.15);
+    color: var(--text);
 }
+.season-pill.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    background: var(--primary);
+    border-radius: 4px;
+    box-shadow: 0 0 8px var(--primary-glow);
+}
+
+.dl-heading { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: var(--spacing-16); letter-spacing: 1px; text-transform: uppercase; }
 
 /* Episodes List */
 .episodes-list {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    margin-top: 16px;
+    gap: var(--spacing-12);
+    margin-top: var(--spacing-12);
 }
 
 .episode-card {
-    background: rgba(20, 20, 20, 0.6);
+    background: var(--surface);
     border-radius: 12px;
-    padding: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(16px);
-    transition: transform 0.2s ease, background 0.2s ease;
+    padding: var(--spacing-16);
+    border: 1px solid var(--border);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-12);
 }
 
-.episode-card:hover {
-    background: rgba(30, 30, 30, 0.8);
-    border-color: rgba(255, 255, 255, 0.1);
+.episode-card:active {
+    transform: scale(0.98);
+    border-color: var(--border-light);
 }
 
 .ep-header {
-    margin-bottom: 14px;
     display: flex;
-    align-items: center;
+    align-items: baseline;
+    gap: var(--spacing-12);
+}
+
+.ep-number {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--text);
+    opacity: 0.9;
+    letter-spacing: -1px;
+}
+.ep-number-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: -4px;
+}
+.ep-number-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
 }
 
 .ep-title {
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 15px;
+    font-weight: 600;
     color: var(--text);
-    letter-spacing: 0.3px;
+    flex: 1;
 }
 
 .ep-qualities {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: var(--spacing-8);
+    margin-top: 4px;
 }
 
 .ep-dl-btn {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
     color: var(--text);
-    padding: 12px 16px;
-    border-radius: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -490,41 +541,29 @@
 }
 
 .ep-dl-btn:active {
-    transform: scale(0.98);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .ep-qtext {
     display: flex;
-    gap: 12px;
+    gap: 6px;
     align-items: center;
 }
 
 .ep-size {
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 500;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.3);
     padding: 2px 6px;
     border-radius: 4px;
 }
 
 .ep-action {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text);
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    color: var(--primary);
     font-size: 13px;
-    transition: all 0.2s ease;
-}
-
-.ep-dl-btn:active .ep-action {
-    background: var(--text);
-    color: var(--bg);
+    margin-left: 4px;
 }
 
 .empty-season {
@@ -535,10 +574,10 @@
     font-weight: 500;
     background: rgba(255, 255, 255, 0.02);
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
     margin-top: 16px;
 }
 
 :root {
-    --primary-rgb: 229, 9, 20; /* Netflix Red */
+    --primary-rgb: 229, 9, 20;
 }
