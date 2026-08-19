@@ -337,6 +337,12 @@ async def post_to_topic_command(update: Update, context: ContextTypes.DEFAULT_TY
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 DATABASE_URL = os.environ.get('DATABASE_URL')
+# Keep the Telegram Web App endpoint configurable. The old Render service was
+# still hard-coded in several buttons, so Telegram opened the retired Mini App.
+WEB_APP_URL = os.environ.get(
+    'WEB_APP_URL',
+    'https://urmoviebot-1-7d7f.onrender.com/webapp'
+).rstrip('/')
     # 👇👇👇 START COPY HERE 👇👇👇
 db_pool = None
 try:
@@ -3739,7 +3745,6 @@ async def handle_genre_selection(update: Update, context:  ContextTypes.DEFAULT_
         )
 # ==================== KEYBOARD MARKUPS ====================
 def get_main_keyboard():
-    WEB_APP_URL = "https://flimfybox-bot-yht0.onrender.com/webapp"
     keyboard = [
         ['🔍 Search Movies'],
         ['📂 Browse by Genre', '🙋 Request Movie'],
@@ -4281,7 +4286,7 @@ async def background_search_and_send(update: Update, context: ContextTypes.DEFAU
             except: pass
             
             safe_query = quote(query_text)
-            web_app_url = f"https://flimfybox-bot-yht0.onrender.com/webapp?req={safe_query}"
+            web_app_url = f"{WEB_APP_URL}?req={safe_query}"
             
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))]
@@ -4663,7 +4668,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Web App button set karna
-        web_app_url = "https://flimfybox-bot-yht0.onrender.com/webapp"
+        web_app_url = WEB_APP_URL
         await context.bot.set_chat_menu_button(
             chat_id=chat_id,
             menu_button=MenuButtonWebApp(text="🎬 Web Version", web_app=WebAppInfo(url=web_app_url))
@@ -4816,7 +4821,7 @@ async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # 🌐 NAYA JUGAD: Web App URL jisme user ki galat spelling (query) attach hogi
             safe_query = quote(query)
-            web_app_url = f"https://flimfybox-bot-yht0.onrender.com/webapp?req={safe_query}"
+            web_app_url = f"{WEB_APP_URL}?req={safe_query}"
 
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))],
@@ -11730,7 +11735,7 @@ async def main_menu_or_search(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     elif query_text == '🙋 Request Movie':
-        web_app_url = "https://flimfybox-bot-yht0.onrender.com/webapp"
+        web_app_url = WEB_APP_URL
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🌐 Open Request Portal", web_app=WebAppInfo(url=web_app_url))]
         ])
