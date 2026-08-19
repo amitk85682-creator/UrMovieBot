@@ -13,6 +13,7 @@ import re
 import secrets
 import hashlib
 import hmac
+from fuzzywuzzy import process, fuzz
 
 def register_webapp_routes(
     flask_app,
@@ -261,6 +262,25 @@ def register_webapp_routes(
                         'category': r[6] if r[6] else 'Movie',
                         'source': 'local'
                     })
+                # A typo such as "rechar" has no ILIKE match, so score the
+                # local titles before declaring it unavailable.
+                if not local_results:
+                    cur.execute("""
+                        SELECT id, title, year, poster_url, rating, genre, category
+                        FROM movies WHERE title IS NOT NULL
+                    """)
+                    candidates = cur.fetchall()
+                    titles = [row[1] for row in candidates]
+                    for _, score, index in process.extract(query, titles, scorer=fuzz.WRatio, limit=8):
+                        if score < 58:
+                            continue
+                        r = candidates[index]
+                        local_results.append({
+                            'id': r[0], 'title': r[1], 'year': r[2] if r[2] else '',
+                            'image': r[3] if r[3] else 'https://via.placeholder.com/300x450?text=No+Poster',
+                            'rating': r[4] if r[4] else 'N/A', 'genre': r[5] if r[5] else 'Unknown',
+                            'category': r[6] if r[6] else 'Movie', 'source': 'local'
+                        })
                 cur.close()
             except Exception as e:
                 logger.error(f"Local search error: {e}")
@@ -270,25 +290,38 @@ def register_webapp_routes(
         tmdb_results = []
         if len(local_results) < 15:
             try:
-                # Use original query (including year) – no stripping
-                tmdb_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}"
-                resp = requests.get(tmdb_url, timeout=5).json()
-                for item in resp.get('results', []):
-                    img_path = item.get('poster_path') or item.get('backdrop_path')
-                    if not img_path:
-                        continue
-    
-                    tmdb_results.append({
-                        'id': 'tmdb_' + str(item['id']),
-                        'title': item.get('title') or item.get('name') or 'Unknown',
-                        'year': (item.get('release_date') or item.get('first_air_date') or '')[:4],
-                        'image': f"https://image.tmdb.org/t/p/w500{img_path}",
-                        'rating': round(item.get('vote_average', 0), 1),
-                        'genre': 'Action, Drama',
-                        'category': 'Movie' if item.get('media_type') == 'movie' else 'TV Series',
-                        'source': 'tmdb',
-                        'description': item.get('overview', '')
-                    })
+                # Retry TMDB with server-side Google suggestions. This works in
+                # Telegram WebView too, unlike a browser-side JSONP callback.
+                search_terms = [query]
+                if not local_results:
+                    suggest_url = 'https://suggestqueries.google.com/complete/search'
+                    suggest_response = requests.get(
+                        suggest_url,
+                        params={'client': 'firefox', 'q': f'{query} movie'},
+                        headers={'User-Agent': 'Mozilla/5.0'}, timeout=3
+                    ).json()
+                    for suggestion in (suggest_response[1] if len(suggest_response) > 1 else [])[:3]:
+                        corrected = re.sub(r'\s+(movie|series|web series)\s*$', '', suggestion, flags=re.I).strip()
+                        if corrected and corrected.lower() not in {term.lower() for term in search_terms}:
+                            search_terms.append(corrected)
+                for search_term in search_terms:
+                    tmdb_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={quote(search_term)}"
+                    resp = requests.get(tmdb_url, timeout=5).json()
+                    for item in resp.get('results', [])[:8]:
+                        img_path = item.get('poster_path') or item.get('backdrop_path')
+                        if not img_path:
+                            continue
+                        tmdb_results.append({
+                            'id': 'tmdb_' + str(item['id']),
+                            'title': item.get('title') or item.get('name') or 'Unknown',
+                            'year': (item.get('release_date') or item.get('first_air_date') or '')[:4],
+                            'image': f"https://image.tmdb.org/t/p/w500{img_path}",
+                            'rating': round(item.get('vote_average', 0), 1),
+                            'genre': 'Action, Drama',
+                            'category': 'Movie' if item.get('media_type') == 'movie' else 'TV Series',
+                            'source': 'tmdb',
+                            'description': item.get('overview', '')
+                        })
             except Exception as e:
                 logger.error(f"TMDB search error: {e}")
     
