@@ -410,7 +410,7 @@ document.addEventListener('click', (e) => {
                                 let links = '<div class="dl-heading">AVAILABLE QUALITIES</div>';
                                 m.files.forEach(f => {
                                     links += `
-                                        <button class="dl-btn" onclick="downloadMovie(${m.id})">
+                                        <button class="dl-btn" onclick="downloadMovie(${m.id}, ${f.id})">
                                             <span class="quality-text">📁 ${f.quality} <span class="file-size">[${f.size || 'N/A'}]</span></span>
                                             <span class="action">Get</span>
                                         </button>
@@ -479,7 +479,7 @@ document.addEventListener('click', (e) => {
                 
                 ep.qualities.forEach(q => {
                     html += `
-                        <button class="ep-dl-btn" onclick="downloadMovie(${movieId})">
+                        <button class="ep-dl-btn" onclick="downloadMovie(${movieId}, ${q.id})">
                             <span class="ep-qtext"><i class="fas fa-play-circle"></i> ${q.quality} <span class="ep-size">${q.size || ''}</span></span>
                             <span class="ep-action"><i class="fas fa-download"></i></span>
                         </button>
@@ -587,12 +587,13 @@ document.addEventListener('click', (e) => {
         window.downloadBot = function(id) {
             tg.HapticFeedback.impactOccurred('heavy');
             // Seedha Bot ki jagah pehle Secure verification page par bhejenge
-            tg.openLink(`https://flimfybox-bot-yht0.onrender.com/watch/${id}`);
+            tg.openLink(`${window.location.origin}/watch/${id}`);
         };
 
-        window.downloadMovie = function(id) {
+        window.downloadMovie = function(id, fileId = null) {
             tg.HapticFeedback.impactOccurred('heavy');
-            tg.openLink(`https://flimfybox-bot-yht0.onrender.com/watch/${id}`);
+            const filePath = fileId ? `/file/${fileId}` : '';
+            tg.openLink(`${window.location.origin}/watch/${id}${filePath}`);
         };
 
         // Start

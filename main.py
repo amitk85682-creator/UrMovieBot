@@ -16,7 +16,7 @@ import sys
 import concurrent.futures
 from PIL import Image, ImageFilter
 from trending_manager import trending_worker_loop
-from telegram import KeyboardButton, WebAppInfo
+from telegram import WebAppInfo
 from telegram import MenuButtonWebApp, WebAppInfo
 import aiohttp
 # import anthropic  # Agar zaroorat ho toh uncomment karein
@@ -83,7 +83,7 @@ from flask import Flask, request, session, g
 import google.generativeai as genai
 from googleapiclient.discovery import build
 from fuzzywuzzy import process, fuzz
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -1917,9 +1917,12 @@ def setup_database():
             CREATE TABLE IF NOT EXISTS temp_links (
                 token VARCHAR(50) PRIMARY KEY,
                 movie_id INTEGER,
+                movie_file_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Existing deployments already have this table, so migrate it safely.
+        cur.execute("ALTER TABLE temp_links ADD COLUMN IF NOT EXISTS movie_file_id INTEGER")
         
         # 👇👇👇 NAYA TABLE: Auto-Delete Queue ke liye 👇👇👇
         cur.execute("""
@@ -3745,13 +3748,9 @@ async def handle_genre_selection(update: Update, context:  ContextTypes.DEFAULT_
         )
 # ==================== KEYBOARD MARKUPS ====================
 def get_main_keyboard():
-    keyboard = [
-        ['🔍 Search Movies'],
-        ['📂 Browse by Genre', '🙋 Request Movie'],
-        [KeyboardButton("🔥 Trending", web_app=WebAppInfo(url=WEB_APP_URL))],
-        ['📊 My Stats', '❓ Help']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    # The Mini App/menu button is now the single navigation surface. Returning
+    # this markup removes the old six-button reply keyboard for existing users.
+    return ReplyKeyboardRemove()
 
 def get_admin_request_keyboard(user_id, movie_title):
     """Inline keyboard for admin actions on a user request"""
@@ -4466,7 +4465,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 try:
                     cur = conn.cursor()
-                    cur.execute("SELECT movie_id, created_at FROM temp_links WHERE token = %s", (payload,))
+                    cur.execute("SELECT movie_id, movie_file_id, created_at FROM temp_links WHERE token = %s", (payload,))
                     res = cur.fetchone()
                     
                     # Token TURANT delete kar do (Single Use)
@@ -4479,7 +4478,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         track_message_for_deletion(context, chat_id, msg.message_id, 15)
                         return
                     
-                    movie_id, created_at = res
+                    movie_id, movie_file_id, created_at = res
                     time_diff = (datetime.now() - created_at).total_seconds()
                     
                     if time_diff > 60:
@@ -4487,8 +4486,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         track_message_for_deletion(context, chat_id, msg.message_id, 15)
                         return
                     
-                    # Sab sahi hai, movie bhej do!
-                    await deliver_movie_on_start(update, context, movie_id)
+                    # A Mini App quality click includes a concrete movie_files
+                    # record, so send only that file rather than the whole list.
+                    if movie_file_id:
+                        cur = conn.cursor()
+                        cur.execute("""
+                            SELECT m.title, mf.url, mf.file_id
+                            FROM movie_files mf
+                            JOIN movies m ON m.id = mf.movie_id
+                            WHERE mf.id = %s AND mf.movie_id = %s
+                        """, (movie_file_id, movie_id))
+                        selected_file = cur.fetchone()
+                        cur.close()
+                        if not selected_file:
+                            await context.bot.send_message(chat_id, "❌ Selected file is no longer available.")
+                            return
+                        title, url, file_id = selected_file
+                        await send_movie_to_user(update, context, movie_id, title, url, file_id, send_warning=True)
+                    else:
+                        # Backward compatibility for previously issued links.
+                        await deliver_movie_on_start(update, context, movie_id)
                     logger.info(f"✅ Secure token {payload} used successfully for movie {movie_id}")
                     return
 

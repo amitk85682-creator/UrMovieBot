@@ -123,8 +123,11 @@ def register_webapp_routes(
     
             # Get files
             # Updated to fetch extra_info for Season/Episode parsing
-            cur.execute("SELECT quality, file_size, extra_info FROM movie_files WHERE movie_id = %s", (movie_id,))
-            files = [{'quality': f[0], 'size': f[1], 'extra_info': f[2] if len(f) > 2 else ''} for f in cur.fetchall()]
+            cur.execute("SELECT id, quality, file_size, extra_info FROM movie_files WHERE movie_id = %s", (movie_id,))
+            files = [
+                {'id': f[0], 'quality': f[1], 'size': f[2], 'extra_info': f[3] if len(f) > 3 else ''}
+                for f in cur.fetchall()
+            ]
             movie['files'] = files
     
             cur.close()
@@ -500,7 +503,8 @@ def register_webapp_routes(
     
     # 🛡️ MIDDLEMAN REDIRECT PAGE (Anti-Bot)
     @flask_app.route('/watch/<int:movie_id>')
-    def secure_watch(movie_id):
+    @flask_app.route('/watch/<int:movie_id>/file/<int:movie_file_id>')
+    def secure_watch(movie_id, movie_file_id=None):
         # Yeh HTML page user ko dikhega. Bots JS run nahi kar pate.
         html = """
         <!DOCTYPE html>
@@ -523,7 +527,7 @@ def register_webapp_routes(
             <script>
                 // Invisible JS Challenge
                 setTimeout(() => {
-                    fetch('/api/gen_link/""" + str(movie_id) + """', { method: 'POST' })
+                    fetch('/api/gen_link/""" + str(movie_id) + (f"/file/{movie_file_id}" if movie_file_id else "") + """', { method: 'POST' })
                     .then(response => response.json())
                     .then(data => {
                         if(data.url) {
@@ -543,7 +547,8 @@ def register_webapp_routes(
     
     # 🔐 SECRET LINK GENERATOR API (Auto Delete Logic)
     @flask_app.route('/api/gen_link/<int:movie_id>', methods=['POST'])
-    def gen_secure_link(movie_id):
+    @flask_app.route('/api/gen_link/<int:movie_id>/file/<int:movie_file_id>', methods=['POST'])
+    def gen_secure_link(movie_id, movie_file_id=None):
         token = "tmp_" + secrets.token_hex(6)
         conn = get_db_connection()
         if conn:
@@ -551,8 +556,18 @@ def register_webapp_routes(
                 cur = conn.cursor()
                 # Delete old tokens (1 minute se purane)
                 cur.execute("DELETE FROM temp_links WHERE created_at < NOW() - INTERVAL '1 minute'")
-                # Save new token
-                cur.execute("INSERT INTO temp_links (token, movie_id) VALUES (%s, %s)", (token, movie_id))
+                if movie_file_id:
+                    cur.execute(
+                        "SELECT 1 FROM movie_files WHERE id = %s AND movie_id = %s",
+                        (movie_file_id, movie_id)
+                    )
+                    if not cur.fetchone():
+                        return jsonify({'status': 'error', 'message': 'Selected file not found'}), 404
+                # Save a short-lived token for this exact file (if selected).
+                cur.execute(
+                    "INSERT INTO temp_links (token, movie_id, movie_file_id) VALUES (%s, %s, %s)",
+                    (token, movie_id, movie_file_id)
+                )
                 conn.commit()
                 cur.close()
             except Exception as e:
