@@ -243,6 +243,9 @@ def register_webapp_routes(
     
         conn = get_db_connection()
         local_results = []
+        # Retain the local catalogue candidates so TMDB results can be mapped
+        # back to their available local record after a misspelled search.
+        catalog_candidates = []
         if not conn:
             # Do not label TMDB titles as request-only just because the local
             # catalogue connection is temporarily unavailable.
@@ -278,6 +281,7 @@ def register_webapp_routes(
                         FROM movies WHERE title IS NOT NULL
                     """)
                     candidates = cur.fetchall()
+                    catalog_candidates = candidates
                     titles = [row[1] for row in candidates]
                     for _, score, index in process.extract(query, titles, scorer=fuzz.WRatio, limit=8):
                         if score < 58:
@@ -351,6 +355,34 @@ def register_webapp_routes(
         # Deduplicate: normalize title (remove punctuation, spaces, lowercase)
         def normalize_title(t):
             return re.sub(r'[^\w\s]', '', t).lower().replace(" ", "")
+
+        # The user may type "Dhurandra", while TMDB correctly returns
+        # "Dhurandhar". If that TMDB title is effectively the same as a local
+        # title, use the local record and mark it Available—not Request.
+        if catalog_candidates and tmdb_results:
+            candidate_titles = [row[1] for row in catalog_candidates]
+            already_local_ids = {movie['id'] for movie in local_results}
+            for tmdb_movie in tmdb_results:
+                best = process.extractOne(tmdb_movie['title'], candidate_titles, scorer=fuzz.ratio)
+                if not best:
+                    continue
+                _, score, index = best
+                if score < 88:
+                    continue
+                row = catalog_candidates[index]
+                local_year = str(row[2] or '')[:4]
+                tmdb_year = str(tmdb_movie.get('year') or '')[:4]
+                if local_year.isdigit() and tmdb_year.isdigit() and abs(int(local_year) - int(tmdb_year)) > 1:
+                    continue
+                if row[0] not in already_local_ids:
+                    local_results.append({
+                        'id': row[0], 'title': row[1], 'year': row[2] if row[2] else '',
+                        'image': row[3] or tmdb_movie['image'],
+                        'rating': row[4] if row[4] else 'N/A',
+                        'genre': row[5] if row[5] else 'Unknown',
+                        'category': row[6] if row[6] else 'Movie', 'source': 'local'
+                    })
+                    already_local_ids.add(row[0])
     
         seen = set()
         combined = []
