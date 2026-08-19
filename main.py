@@ -6735,44 +6735,63 @@ def get_resolution(text):
     return 'unknown'
 
 
-def is_downgrade(movie_id, new_quality_label, conn):
-    """
-    🛡️ Anti-Downgrade Shield
-    Check karo ki kya DB mein SAME resolution ki koi HIGHER level file maujud hai.
-    Agar haan, toh nayi (lower level) file ko REJECT karo (save mat karo).
+def get_file_content_scope(extra_info):
+    """Return the exact movie/season/episode unit represented by a file row."""
+    text = str(extra_info or '').upper()
+    season_match = re.search(r'\b(?:S|SEASON)\s*0*(\d{1,2})(?=\s|E|EP|$)', text)
+    episode_match = re.search(
+        r'(?:\b(?:E|EP|EPISODE)|(?<=\d)E)\s*0*(\d{1,3})(?:\s*(?:-|~|TO)\s*(?:E|EP|EPISODE)?\s*0*(\d{1,3}))?\b',
+        text
+    )
+    part_match = re.search(r'\b(?:P|PART)\s*0*(\d{1,3})\b', text)
 
-    Returns:
-        (True, existing_label)  → REJECT: DB mein better file hai
-        (False, None)           → ALLOW: File save karo
+    if season_match and episode_match:
+        start = int(episode_match.group(1))
+        end = int(episode_match.group(2) or start)
+        return f"series:s{int(season_match.group(1)):02d}:e{start:03d}-{end:03d}"
+    if season_match:
+        return f"series:s{int(season_match.group(1)):02d}:season-pack"
+    if part_match:
+        return f"part:{int(part_match.group(1)):03d}"
+    return "movie"
+
+
+def is_downgrade(movie_id, new_quality_label, new_extra_info, conn):
+    """
+    Theatre-print shield, scoped to the exact movie/episode.
+    Digital sources (HDRip, WEBRip, WEB-DL, BluRay) are additive; a theatre
+    print is rejected only when a better theatre/digital source exists for the
+    same content scope.
     """
     new_level = get_source_level(new_quality_label)
-    new_res = get_resolution(new_quality_label)
-
-    # Agar source ya resolution unknown hai, toh allow kar do (safe side)
-    if new_level == 0 or new_res == 'unknown':
+    # Unknown and digital files are additive; never block them.
+    if new_level == 0 or new_level >= 3:
         return False, None
+
+    new_scope = get_file_content_scope(new_extra_info)
 
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT quality FROM movie_files WHERE movie_id = %s AND quality != %s",
-            (movie_id, new_quality_label)
+            "SELECT quality, extra_info FROM movie_files WHERE movie_id = %s",
+            (movie_id,)
         )
         existing_files = cur.fetchall()
         cur.close()
 
         for row in existing_files:
-            old_label = row[0]
+            old_label, old_extra_info = row
+            if get_file_content_scope(old_extra_info) != new_scope:
+                continue
             old_level = get_source_level(old_label)
-            old_res = get_resolution(old_label)
 
-            # Same resolution + DB mein higher level already hai → REJECT
-            if old_res == new_res and old_level > new_level:
+            # Digital makes theatre prints obsolete. Before that, don't add a
+            # worse theatre print after a better theatre print for this episode.
+            if old_level >= 3 or old_level > new_level:
                 logger.info(
                     f"🛡️ Anti-Downgrade BLOCKED: movie_id={movie_id} | "
                     f"Tried='{new_quality_label}' (L{new_level}) | "
-                    f"DB has='{old_label}' (L{old_level}) | "
-                    f"Same res={new_res}"
+                    f"DB has='{old_label}' (L{old_level}) | scope={new_scope}"
                 )
                 return True, old_label
 
@@ -6783,52 +6802,55 @@ def is_downgrade(movie_id, new_quality_label, conn):
         return False, None  # Error par allow kar do (safe side)
 
 
-def auto_upgrade_delete(movie_id, new_quality_label, conn):
+def auto_upgrade_delete(movie_id, new_quality_label, new_extra_info, conn):
     """
-    🔄 Resolution-Locked Auto-Upgrade System
-    Nayi file ka source level + resolution check karo.
-    Sirf SAME resolution ki lower level files DELETE karo.
-    Different resolution ki files SAFE rahein.
-    Same level = koi delete nahi (dono save rahein).
+    Digital-release cleanup, scoped to the exact movie/episode.
+    When HDRip/WEBRip/WEB-DL/BluRay arrives, remove only CAM/HDTC/HDTS-style
+    theatre prints for that same scope. Digital qualities always coexist.
     Returns: (deleted_count, deleted_labels)
     """
     new_level = get_source_level(new_quality_label)
-    new_res = get_resolution(new_quality_label)
 
-    if new_level == 0 or new_res == 'unknown':
-        return 0, []  # Unknown source/resolution, kuch delete mat karo
+    if new_level < 3:
+        return 0, []
+
+    new_scope = get_file_content_scope(new_extra_info)
 
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT quality FROM movie_files WHERE movie_id = %s AND quality != %s",
-            (movie_id, new_quality_label)
+            "SELECT id, quality, extra_info FROM movie_files WHERE movie_id = %s",
+            (movie_id,)
         )
         existing_files = cur.fetchall()
 
+        ids_to_delete = []
         labels_to_delete = []
         for row in existing_files:
-            old_label = row[0]
+            file_row_id, old_label, old_extra_info = row
+            if get_file_content_scope(old_extra_info) != new_scope:
+                continue
             old_level = get_source_level(old_label)
-            old_res = get_resolution(old_label)
 
-            # ✅ Resolution-Locked: Sirf SAME resolution + lower level = DELETE
-            if old_level > 0 and old_level < new_level and old_res == new_res:
+            # Theatre prints are disposable only after a digital release for
+            # this exact movie/season/episode has been saved.
+            if old_level in (1, 2):
+                ids_to_delete.append(file_row_id)
                 labels_to_delete.append(old_label)
 
         deleted_count = 0
-        if labels_to_delete:
-            placeholders = ','.join(['%s'] * len(labels_to_delete))
+        if ids_to_delete:
+            placeholders = ','.join(['%s'] * len(ids_to_delete))
             cur.execute(
-                f"DELETE FROM movie_files WHERE movie_id = %s AND quality IN ({placeholders})",
-                [movie_id] + labels_to_delete
+                f"DELETE FROM movie_files WHERE movie_id = %s AND id IN ({placeholders})",
+                [movie_id] + ids_to_delete
             )
             deleted_count = cur.rowcount
             conn.commit()
             logger.info(
                 f"🔄 Auto-Upgrade: movie_id={movie_id} | "
-                f"New='{new_quality_label}' (L{new_level}, {new_res}) | "
-                f"Deleted {deleted_count} lower prints (same res): {labels_to_delete}"
+                f"New='{new_quality_label}' (L{new_level}) | scope={new_scope} | "
+                f"Deleted {deleted_count} theatre print(s): {labels_to_delete}"
             )
 
         cur.close()
@@ -7691,7 +7713,7 @@ async def _pm_save_file(message, context) -> str | None:
     if not precheck_conn:
         return None
     try:
-        rejected, existing = is_downgrade(movie_id, label, precheck_conn)
+        rejected, existing = is_downgrade(movie_id, label, f_extra, precheck_conn)
     except Exception as exc:
         logger.error("_pm_save_file pre-upload downgrade check failed: %s", exc)
         return None
@@ -7749,7 +7771,7 @@ async def _pm_save_file(message, context) -> str | None:
         )
 
         try:
-            deleted, deleted_labels = auto_upgrade_delete(movie_id, label, conn)
+            deleted, deleted_labels = auto_upgrade_delete(movie_id, label, f_extra, conn)
             if deleted > 0:
                 BATCH_SESSION['file_count'] = max(0, BATCH_SESSION.get('file_count', 0) - deleted)
                 logger.info("🔄 _pm_save_file: %s old print(s) deleted: %s", deleted, deleted_labels)
@@ -9532,7 +9554,7 @@ async def batch18_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if conn:
         try:
             # 🛡️ Anti-Downgrade Shield: Pehle check karo ki DB mein better file toh nahi hai
-            rejected, existing = is_downgrade(BATCH_18_SESSION['movie_id'], label, conn)
+            rejected, existing = is_downgrade(BATCH_18_SESSION['movie_id'], label, f_extra, conn)
             if rejected:
                 logger.info(f"🛡️ Batch18: REJECTED '{label}' — DB already has better '{existing}'")
                 await upload_status.edit_text(
@@ -9556,7 +9578,7 @@ async def batch18_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 🔄 Auto-Upgrade: पुरानी घटिया prints delete करो
             upgrade_msg = ""
             try:
-                deleted, deleted_labels = auto_upgrade_delete(BATCH_18_SESSION['movie_id'], label, conn)
+                deleted, deleted_labels = auto_upgrade_delete(BATCH_18_SESSION['movie_id'], label, f_extra, conn)
                 if deleted > 0:
                     BATCH_18_SESSION['file_count'] = max(0, BATCH_18_SESSION['file_count'] - deleted)
                     upgrade_msg = f"\n🔄 Upgraded! {deleted} पुरानी print(s) auto-deleted"
