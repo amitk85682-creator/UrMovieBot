@@ -1,4 +1,7 @@
-const tg = window.Telegram.WebApp;
+const tg = window.Telegram?.WebApp || {
+            expand() {}, ready() {}, close() {}, openLink(url) { window.open(url, '_blank'); },
+            HapticFeedback: { notificationOccurred() {}, impactOccurred() {} }, initDataUnsafe: {}
+        };
         tg.expand();
         tg.ready();
         const BOT_USERNAME = "FlimfyBoxBot"; // change if needed
@@ -116,7 +119,9 @@ const tg = window.Telegram.WebApp;
                     const m = top5[idx];
                     document.getElementById('heroSlider').style.backgroundImage = `url(${m.image})`;
                     document.getElementById('heroTitle').innerText = m.title;
-                    document.getElementById('heroMeta').innerText = `${m.year} • ${m.category}`;
+                    const metadata = [m.year, m.category, m.genre].filter(Boolean).join(' • ');
+                    document.getElementById('heroMeta').innerText = metadata || 'A FlimfyBox featured title';
+                    document.getElementById('heroWatch').onclick = () => openDetails(String(m.id), m.source === 'tmdb');
                     idx = (idx + 1) % top5.length;
                 };
                 updateHero();
