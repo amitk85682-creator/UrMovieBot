@@ -293,7 +293,7 @@ document.addEventListener('click', (e) => {
                 document.getElementById('dpBackdrop').style.backgroundImage = `url(${backdropImg})`;
                 document.getElementById('dpFloatPoster').src = movie.image;
                 document.getElementById('dpTitle').innerText = movie.title;
-                document.getElementById('dpRating').innerText = movie.rating || 'N/A';
+                document.getElementById('dpRating').innerText = movie.rating && movie.rating !== 'N/A' ? movie.rating : '—';
                 document.getElementById('dpGenre').innerText = movie.genre || 'Action, Drama';
                 document.getElementById('dpDesc').innerText = movie.description || 'No description available.';
                 document.getElementById('castSection').innerHTML = '';
@@ -314,7 +314,7 @@ document.addEventListener('click', (e) => {
                         document.getElementById('dpBackdrop').style.backgroundImage = `url(${backdropUrl})`;
                         document.getElementById('dpFloatPoster').src = m.image;
                         document.getElementById('dpTitle').innerText = m.title;
-                        document.getElementById('dpRating').innerText = m.rating + '/10';
+                        document.getElementById('dpRating').innerText = m.rating && m.rating !== 'N/A' ? m.rating : '—';
                         document.getElementById('dpGenre').innerText = m.genre;
                         document.getElementById('dpDesc').innerText = m.description;
                         // Cast
@@ -454,17 +454,28 @@ document.addEventListener('click', (e) => {
             
             epNumbers.forEach(epNum => {
                 const ep = seasonData.episodes[epNum];
+                let epDisplayNum = epNum > 0 ? epNum.toString().padStart(2, '0') : '--';
+                let epLabel = epNum > 0 ? 'EPISODE' : 'EXTRAS';
+                let actualTitle = ep.title.replace(/^EP \d+\s*/i, ''); // Remove redundant 'EP 01' from title if it exists, leaving the rest if it's there
+                if (!actualTitle || actualTitle === ep.title) {
+                    actualTitle = ep.title;
+                }
+
                 html += `
                 <div class="episode-card">
                     <div class="ep-header">
-                        <div class="ep-title">${ep.title}</div>
+                        <div class="ep-number-group">
+                            <div class="ep-number-label">${epLabel}</div>
+                            <div class="ep-number">${epDisplayNum}</div>
+                        </div>
+                        <div class="ep-title">${actualTitle}</div>
                     </div>
                     <div class="ep-qualities">`;
                 
                 ep.qualities.forEach(q => {
                     html += `
                         <button class="ep-dl-btn" onclick="downloadMovie(${movieId})">
-                            <span class="ep-qtext">${q.quality} <span class="ep-size">${q.size || ''}</span></span>
+                            <span class="ep-qtext"><i class="fas fa-play-circle"></i> ${q.quality} <span class="ep-size">${q.size || ''}</span></span>
                             <span class="ep-action"><i class="fas fa-download"></i></span>
                         </button>
                     `;
