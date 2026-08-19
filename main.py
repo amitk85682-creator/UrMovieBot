@@ -2353,6 +2353,13 @@ def get_db_connection():
         return None
     try:
         conn = db_pool.getconn()
+        # A previous query can leave a pooled connection in an aborted
+        # transaction. Reusing it makes catalogue searches silently fail and
+        # incorrectly fall back to TMDB request results.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return conn
     except Exception as e:
         logger.error(f"Error getting connection from pool: {e}")
@@ -2362,6 +2369,11 @@ def close_db_connection(conn):
     """Connection ko wapas pool me dalne ke liye helper"""
     if db_pool and conn:
         try:
+            # Never return an aborted transaction to the shared pool.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             db_pool.putconn(conn)
         except Exception:
             pass

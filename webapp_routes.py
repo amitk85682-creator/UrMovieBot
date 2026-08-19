@@ -145,6 +145,8 @@ def register_webapp_routes(
             """, (movie_id,))
             row = cur.fetchone()
             if not row:
+                cur.close()
+                close_db_connection(conn)
                 return jsonify({'status': 'error', 'message': 'Movie not found'}), 404
     
             movie = {
@@ -241,8 +243,14 @@ def register_webapp_routes(
     
         conn = get_db_connection()
         local_results = []
-        if conn:
-            try:
+        if not conn:
+            # Do not label TMDB titles as request-only just because the local
+            # catalogue connection is temporarily unavailable.
+            return jsonify({
+                'status': 'error',
+                'message': 'Catalogue is temporarily unavailable. Please try again.'
+            }), 503
+        try:
                 cur = conn.cursor()
                 cur.execute("""
                     SELECT id, title, year, poster_url, rating, genre, category
@@ -282,10 +290,14 @@ def register_webapp_routes(
                             'category': r[6] if r[6] else 'Movie', 'source': 'local'
                         })
                 cur.close()
-            except Exception as e:
-                logger.error(f"Local search error: {e}")
-            finally:
-                close_db_connection(conn)
+        except Exception as e:
+            logger.error(f"Local search error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Catalogue search failed. Please try again.'
+            }), 500
+        finally:
+            close_db_connection(conn)
     
         tmdb_results = []
         if len(local_results) < 15:
