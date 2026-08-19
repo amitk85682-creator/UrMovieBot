@@ -2471,8 +2471,18 @@ def get_google_title_suggestions(query: str, limit: int = 3):
         suggestions = data[1] if isinstance(data, list) and len(data) > 1 else []
         clean = []
         for item in suggestions:
-            title = re.sub(r'\s+(movie|series|web series)\s*$', '', str(item), flags=re.I).strip()
-            if title and title.lower() != query.lower() and title not in clean:
+            # Google commonly suggests searches such as "Reacher movie cast"
+            # and "Reacher movie 2026".  Those are queries, not title choices.
+            title = re.sub(
+                r'\s+(?:movie|film|series|web\s+series)(?:\s+(?:cast|trailer|release\s+date|review|episodes?|season\s*\d+|\d{4}))*\s*$',
+                '', str(item), flags=re.I
+            ).strip()
+            # Do not show unrelated Google search phrases as a movie button.
+            if (
+                title and title.lower() != query.lower()
+                and fuzz.WRatio(query, title) >= 60
+                and title.lower() not in {saved.lower() for saved in clean}
+            ):
                 clean.append(title)
         result = clean[:limit]
     except Exception as e:
@@ -3992,7 +4002,7 @@ def create_quality_selection_keyboard(movie_id, view="main", page=1, total_pages
     return InlineKeyboardMarkup(keyboard)
 
 # ==================== HELPER FUNCTION ====================
-async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE, movie_id: int, title: str, url: Optional[str] = None, file_id: Optional[str] = None, send_warning: bool = True, pre_fetched_meta: dict = None):
+async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE, movie_id: int, title: str, url: Optional[str] = None, file_id: Optional[str] = None, send_warning: bool = True, pre_fetched_meta: dict = None, require_exact_file: bool = False):
     """Sends the movie file/link to the user with THUMBNAIL PROTECTION - OPTIMIZED & FIXED"""
     chat_id = update.effective_chat.id
 
@@ -4133,6 +4143,16 @@ async def send_movie_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
             finally:
                 close_db_connection(conn)
     # 👆 ---------------------------------------------------- 👆
+
+    # A Mini App quality button must never fall back to the whole movie list.
+    # It always carries a concrete movie_files id; if that record has no usable
+    # source, fail clearly instead of sending every available quality.
+    if require_exact_file and not url and not file_id:
+        await context.bot.send_message(
+            chat_id=update.effective_user.id,
+            text="❌ Selected file is unavailable. Please choose another quality from the Mini App."
+        )
+        return
 
     # 1. Multi-Quality Check (Agar direct link/file nahi hai)
     if not url and not file_id:
@@ -4599,7 +4619,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(chat_id, "❌ Selected file is no longer available.")
                             return
                         title, url, file_id = selected_file
-                        await send_movie_to_user(update, context, movie_id, title, url, file_id, send_warning=True)
+                        await send_movie_to_user(
+                            update, context, movie_id, title, url, file_id,
+                            send_warning=True, require_exact_file=True
+                        )
                     else:
                         # Backward compatibility for previously issued links.
                         await deliver_movie_on_start(update, context, movie_id)

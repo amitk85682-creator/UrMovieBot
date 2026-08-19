@@ -300,10 +300,21 @@ def register_webapp_routes(
                         params={'client': 'firefox', 'q': f'{query} movie'},
                         headers={'User-Agent': 'Mozilla/5.0'}, timeout=3
                     ).json()
-                    for suggestion in (suggest_response[1] if len(suggest_response) > 1 else [])[:3]:
-                        corrected = re.sub(r'\s+(movie|series|web series)\s*$', '', suggestion, flags=re.I).strip()
-                        if corrected and corrected.lower() not in {term.lower() for term in search_terms}:
+                    for suggestion in (suggest_response[1] if len(suggest_response) > 1 else [])[:6]:
+                        # Suggestions like "Reacher movie cast" are Google
+                        # query completions, not actual title names.
+                        corrected = re.sub(
+                            r'\s+(?:movie|film|series|web\s+series)(?:\s+(?:cast|trailer|release\s+date|review|episodes?|season\s*\d+|\d{4}))*\s*$',
+                            '', str(suggestion), flags=re.I
+                        ).strip()
+                        if (
+                            corrected
+                            and fuzz.WRatio(query, corrected) >= 60
+                            and corrected.lower() not in {term.lower() for term in search_terms}
+                        ):
                             search_terms.append(corrected)
+                        if len(search_terms) >= 4:
+                            break
                 for search_term in search_terms:
                     tmdb_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={quote(search_term)}"
                     resp = requests.get(tmdb_url, timeout=5).json()
@@ -513,8 +524,17 @@ def register_webapp_routes(
             # resp ka format: ["query", ["suggestion1", "suggestion2", ...]]
             suggestions = resp[1] if len(resp) > 1 else []
             
-            # 'movie' word hata kar clean naam nikalna aur top 6 suggestions dikhana
-            clean_suggs = [s.replace(' movie', '').title() for s in suggestions][:6] 
+            # Only return title-like suggestions; Google also returns searches
+            # such as "reacher movie cast" and "reacher movie 2026".
+            clean_suggs = []
+            for suggestion in suggestions:
+                title = re.sub(
+                    r'\s+(?:movie|film|series|web\s+series)(?:\s+(?:cast|trailer|release\s+date|review|episodes?|season\s*\d+|\d{4}))*\s*$',
+                    '', str(suggestion), flags=re.I
+                ).strip()
+                if title and fuzz.WRatio(q, title) >= 60 and title.lower() not in {x.lower() for x in clean_suggs}:
+                    clean_suggs.append(title)
+            clean_suggs = clean_suggs[:6]
             return jsonify(clean_suggs)
         except Exception as e:
             logger.error(f"Suggest API Error: {e}")

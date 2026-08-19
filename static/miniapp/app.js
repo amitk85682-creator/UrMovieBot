@@ -11,6 +11,8 @@ const tg = window.Telegram?.WebApp || {
         let tmdbMoviesMap = {};
         let activeMovie = null;
         let savedMovieIds = new Set();
+        let myListRequestId = 0;
+        let detailsRequestId = 0;
 
         // Utility
         function showToast(msg) {
@@ -50,6 +52,7 @@ const tg = window.Telegram?.WebApp || {
         };
 
         window.showMyList = async function() {
+            const requestId = ++myListRequestId;
             const grid = document.getElementById('myListGrid');
             document.getElementById('mainContent').style.display = 'none';
             document.getElementById('searchResultsContent').style.display = 'none';
@@ -60,6 +63,7 @@ const tg = window.Telegram?.WebApp || {
             try {
                 const response = await fetch('/api/my-list', { headers: telegramAuthHeaders() });
                 const data = await response.json();
+                if (requestId !== myListRequestId) return;
                 if (!response.ok || data.status !== 'success') throw new Error(data.message || 'Could not load My List');
                 (data.movies || []).forEach(movie => {
                     if (!allMovies.some(existing => String(existing.id) === String(movie.id))) allMovies.push(movie);
@@ -69,6 +73,7 @@ const tg = window.Telegram?.WebApp || {
                     ? renderCards(data.movies, 'grid-card', false)
                     : '<div class="empty-my-list">Your list is empty.<br><span>Save a title with the + button.</span></div>';
             } catch (error) {
+                if (requestId !== myListRequestId) return;
                 grid.innerHTML = `<div class="empty-my-list">${error.message}</div>`;
             }
         };
@@ -79,21 +84,25 @@ const tg = window.Telegram?.WebApp || {
                 return;
             }
             try {
-                const isSaved = savedMovieIds.has(String(activeMovie.id));
-                const response = await fetch(isSaved ? `/api/my-list/${activeMovie.id}` : '/api/my-list', {
+                // Snapshot the details-page movie. The home carousel changes in
+                // the background, so never read a mutable global after await.
+                const movieToSave = activeMovie;
+                const movieId = String(movieToSave.id);
+                const isSaved = savedMovieIds.has(movieId);
+                const response = await fetch(isSaved ? `/api/my-list/${movieId}` : '/api/my-list', {
                     method: isSaved ? 'DELETE' : 'POST',
                     headers: { 'Content-Type': 'application/json', ...telegramAuthHeaders() },
-                    body: JSON.stringify({ movie_id: activeMovie.id })
+                    body: JSON.stringify({ movie_id: movieId })
                 });
                 const data = await response.json();
                 if (!response.ok || data.status !== 'success') throw new Error(data.message || 'Could not save title');
                 const button = document.getElementById('detailMyListButton');
                 if (isSaved) {
-                    savedMovieIds.delete(String(activeMovie.id));
+                    savedMovieIds.delete(movieId);
                     if (button) button.innerHTML = '<i class="fas fa-plus"></i>';
                     showToast('Removed from My List');
                 } else {
-                    savedMovieIds.add(String(activeMovie.id));
+                    savedMovieIds.add(movieId);
                     if (button) button.innerHTML = '<i class="fas fa-check"></i>';
                     showToast('Saved to My List');
                 }
@@ -196,7 +205,6 @@ const tg = window.Telegram?.WebApp || {
                 const top5 = movies.slice(0, 5);
                 const updateHero = () => {
                     const m = top5[idx];
-                    activeMovie = m;
                     document.getElementById('heroSlider').style.backgroundImage = `url(${m.image})`;
                     document.getElementById('heroTitle').innerText = m.title;
                     const metadata = [m.year, m.category, m.genre].filter(Boolean).join(' • ');
@@ -416,6 +424,7 @@ document.addEventListener('click', (e) => {
             const movie = isTMDB ? tmdbMoviesMap[id] : allMovies.find(m => m.id == id);
             if (!movie) return;
             activeMovie = movie;
+            const requestId = ++detailsRequestId;
             const myListButton = document.getElementById('detailMyListButton');
             if (myListButton) {
                 myListButton.innerHTML = savedMovieIds.has(String(movie.id))
@@ -441,8 +450,11 @@ document.addEventListener('click', (e) => {
             fetch(`/api/movie/${id}`)
                 .then(res => res.json())
                 .then(data => {
+                    // Ignore a late response for a card the user has already left.
+                    if (requestId !== detailsRequestId || String(activeMovie?.id) !== String(id)) return;
                     if (data.status === 'success') {
                         const m = data.movie;
+                        activeMovie = { ...movie, ...m, source: 'local' };
                         // Set backdrop (use TMDB backdrop if exists, else poster)
                         const backdropUrl = m.backdrop ? m.backdrop : m.image;
                         document.getElementById('dpBackdrop').style.backgroundImage = `url(${backdropUrl})`;
