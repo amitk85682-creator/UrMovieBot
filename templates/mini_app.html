@@ -92,13 +92,13 @@
                     </div>
                     <h1 class="dp-title" id="dpTitle">Title</h1>
                 </div>
-                <div class="rich-info-box">
-                    <div><span>IMDb</span> <label id="dpRating" style="color:var(--primary);">—</label></div>
-                    <div><span>Genre</span> <label id="dpGenre">—</label></div>
-                    <div><span>Cast</span> <label id="dpActors">Fetching...</label></div>
-                    <div><span>Audio</span> <label>Dual Audio [Hindi & English] + Subs</label></div>
-                    <div class="rich-desc" id="dpDesc">Loading story...</div>
+                <div class="rich-info-box" id="dpRichInfo">
+                    <div class="info-pill highlight"><i class="fas fa-star"></i> <span id="dpRating">—</span></div>
+                    <div class="info-pill"><span id="dpGenre">—</span></div>
+                    <div class="info-pill"><i class="fas fa-volume-up"></i> <span>Dual Audio</span></div>
+                    <div class="info-pill"><i class="fas fa-closed-captioning"></i> <span>Subs</span></div>
                 </div>
+                <div class="rich-desc" id="dpDesc">Loading story...</div>
                 <div id="castSection" class="cast-list"></div>
                 <div id="dpTrailerBtn"></div>
                 <div id="dpSeasons" class="seasons-container"></div>
